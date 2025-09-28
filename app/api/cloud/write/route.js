@@ -162,9 +162,9 @@ function decompressData(compressedPayload, header) {
 // Store sensor data in database
 async function storeSensorData(sensorValues) {
   try {
-    // Validate input - expect exactly 10 sensor readings
-    if (!Array.isArray(sensorValues) || sensorValues.length !== 10) {
-      throw new Error(`Expected 10 sensor values, received ${sensorValues?.length || 0}`);
+    // Validate input - expect values in multiples of 10 (samples × 10 sensors)
+    if (!Array.isArray(sensorValues) || sensorValues.length % 10 !== 0) {
+      throw new Error(`Expected sensor values in multiples of 10, received ${sensorValues?.length || 0}`);
     }
 
     // Check if Supabase client is properly configured
@@ -173,38 +173,52 @@ async function storeSensorData(sensorValues) {
       return { success: true, message: 'Database storage skipped - environment not configured' };
     }
 
+    // Calculate number of samples (each sample has 10 sensor values)
+    const numSamples = sensorValues.length / 10;
+    console.log(`Processing ${numSamples} samples with 10 sensors each`);
+
     // Apply gain factors to convert raw values to actual sensor readings
     const gainFactors = [10, 10, 100, 10, 10, 10, 10, 10, 1, 1]; // As per specification
     
-    const dataRecord = {
-      vac1: sensorValues[0] / gainFactors[0],        // L1 Phase voltage (V)
-      iac1: sensorValues[1] / gainFactors[1],        // L1 Phase current (A)
-      fac1: sensorValues[2] / gainFactors[2],        // L1 Phase frequency (Hz)
-      vpv1: sensorValues[3] / gainFactors[3],        // PV1 input voltage (V)
-      vpv2: sensorValues[4] / gainFactors[4],        // PV2 input voltage (V)
-      ipv1: sensorValues[5] / gainFactors[5],        // PV1 input current (A)
-      ipv2: sensorValues[6] / gainFactors[6],        // PV2 input current (A)
-      temperature: sensorValues[7] / gainFactors[7], // Inverter temperature (°C)
-      export_power: sensorValues[8] / gainFactors[8], // Export power percentage (%)
-      output_power: sensorValues[9] / gainFactors[9]  // Output power (W)
-    };
+    // Create data records for each sample
+    const dataRecords = [];
+    for (let sample = 0; sample < numSamples; sample++) {
+      const startIndex = sample * 10;
+      const sampleValues = sensorValues.slice(startIndex, startIndex + 10);
+      
+      const dataRecord = {
+        vac1: sampleValues[0] / gainFactors[0],        // L1 Phase voltage (V)
+        iac1: sampleValues[1] / gainFactors[1],        // L1 Phase current (A)
+        fac1: sampleValues[2] / gainFactors[2],        // L1 Phase frequency (Hz)
+        vpv1: sampleValues[3] / gainFactors[3],        // PV1 input voltage (V)
+        vpv2: sampleValues[4] / gainFactors[4],        // PV2 input voltage (V)
+        ipv1: sampleValues[5] / gainFactors[5],        // PV1 input current (A)
+        ipv2: sampleValues[6] / gainFactors[6],        // PV2 input current (A)
+        temperature: sampleValues[7] / gainFactors[7], // Inverter temperature (°C)
+        export_power: sampleValues[8] / gainFactors[8], // Export power percentage (%)
+        output_power: sampleValues[9] / gainFactors[9]  // Output power (W)
+      };
+      
+      dataRecords.push(dataRecord);
+      
+      console.log(`Sample ${sample + 1}:`, {
+        vac1: dataRecord.vac1,
+        iac1: dataRecord.iac1,
+        fac1: dataRecord.fac1,
+        vpv1: dataRecord.vpv1,
+        vpv2: dataRecord.vpv2,
+        ipv1: dataRecord.ipv1,
+        ipv2: dataRecord.ipv2,
+        temperature: dataRecord.temperature,
+        export_power: dataRecord.export_power,
+        output_power: dataRecord.output_power
+      });
+    }
     
-    console.log('Storing sensor readings:', {
-      vac1: dataRecord.vac1,
-      iac1: dataRecord.iac1,
-      fac1: dataRecord.fac1,
-      vpv1: dataRecord.vpv1,
-      vpv2: dataRecord.vpv2,
-      ipv1: dataRecord.ipv1,
-      ipv2: dataRecord.ipv2,
-      temperature: dataRecord.temperature,
-      export_power: dataRecord.export_power,
-      output_power: dataRecord.output_power
-    });
-    
+    // Insert all samples at once
     const { data, error } = await supabase
       .from("eco_data")
-      .insert([dataRecord])
+      .insert(dataRecords)
       .select();
 
     if (error) {
@@ -216,9 +230,9 @@ async function storeSensorData(sensorValues) {
       };
     }
     
-    console.log(`✅ Successfully stored sensor readings`);
+    console.log(`✅ Successfully stored ${numSamples} sensor readings`);
     
-    return { success: true, data: data[0], sensor_values: sensorValues };
+    return { success: true, data: data, sensor_values: sensorValues, samples_stored: numSamples };
     
   } catch (error) {
     console.error('Storage function error:', error);
@@ -323,10 +337,11 @@ export async function POST(req) {
       status: "success",
       frame: "ace5000000000000", // Simple confirmation hex data
       values_processed: sensorValues.length,
+      samples_processed: sensorValues.length / 10,
       values: sensorValues, // Include the actual sensor values
       timestamp: new Date().toISOString(),
       storage: storageResult.success ? "stored" : "processing_only",
-      storage_info: storageResult.success ? "Data stored in database" : `Processing successful, storage skipped: ${storageResult.error || 'Environment not configured'}`
+      storage_info: storageResult.success ? `${storageResult.samples_stored || 0} samples stored in database` : `Processing successful, storage skipped: ${storageResult.error || 'Environment not configured'}`
     };
 
     console.log('=== Success Response ===');
