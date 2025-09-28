@@ -89,70 +89,90 @@ function parseFrameHeader(headerData) {
   return header;
 }
 
-// Decompress Delta + RLE compressed data
+// Decompress Delta + RLE compressed data (matching decom.py logic)
 function decompressData(compressedPayload, header) {
-  const result = [];
-  let pos = 0;
-  
   console.log(`Decompressing ${compressedPayload.length} bytes using Delta + RLE`);
   
   const count = header.count;
   const regCount = header.regCount;
+  let idx = 0;
   
+  // Initialize samples array: samples[sample_idx][reg]
+  const samples = [];
+  for (let i = 0; i < count; i++) {
+    samples[i] = new Array(regCount).fill(0);
+  }
+  
+  // Decode each register stream
   for (let reg = 0; reg < regCount; reg++) {
-    const regValues = [];
-    
-    // Read first value (2 bytes, big-endian)
-    if (pos + 2 > compressedPayload.length) {
-      throw new Error(`Insufficient data for register ${reg} first value`);
+    if (idx + 2 > compressedPayload.length) {
+      throw new Error(`Truncated initial value for register ${reg}`);
     }
     
-    let currentValue = (compressedPayload[pos] << 8) | compressedPayload[pos + 1];
-    pos += 2;
-    regValues.push(currentValue);
+    // Read first value (2 bytes, big-endian)
+    let prevVal = (compressedPayload[idx] << 8) | compressedPayload[idx + 1];
+    idx += 2;
+    samples[0][reg] = prevVal;
+    let sampleIdx = 1;
     
-    console.log(`Register ${reg}: First value = ${currentValue}`);
+    console.log(`Register ${reg}: First value = ${prevVal}`);
     
     // Process delta sequence until we have 'count' values
-    while (regValues.length < count && pos < compressedPayload.length) {
-      const marker = compressedPayload[pos++];
+    while (sampleIdx < count && idx < compressedPayload.length) {
+      const flag = compressedPayload[idx];
+      idx += 1;
       
-      if (marker === 0x00) {
-        // RLE: Repeat current value
-        const runLength = compressedPayload[pos++];
-        for (let i = 0; i < runLength && regValues.length < count; i++) {
-          regValues.push(currentValue);
+      if (flag === 0x00) {  // RLE
+        if (idx >= compressedPayload.length) {
+          throw new Error("Truncated RLE run");
         }
-        console.log(`Register ${reg}: RLE repeat ${currentValue} x ${runLength}`);
-        // 🔥 CRITICAL: Break if register is complete
-        if (regValues.length >= count) break;
+        const run = compressedPayload[idx];
+        idx += 1;
         
-      } else if (marker === 0x01) {
-        // Delta: Add delta to current value
-        const deltaHi = compressedPayload[pos++];
-        const deltaLo = compressedPayload[pos++];
-        const delta = (deltaHi << 8) | deltaLo;
+        for (let i = 0; i < run; i++) {
+          if (sampleIdx >= count) break;
+          samples[sampleIdx][reg] = prevVal;
+          sampleIdx += 1;
+        }
+        console.log(`Register ${reg}: RLE repeat ${prevVal} x ${run}`);
         
-        // Handle signed delta (16-bit two's complement)
-        const signedDelta = delta > 32767 ? delta - 65536 : delta;
-        currentValue += signedDelta;
-        regValues.push(currentValue);
+      } else if (flag === 0x01) {  // Delta
+        if (idx + 2 > compressedPayload.length) {
+          throw new Error("Truncated delta");
+        }
         
-        console.log(`Register ${reg}: Delta ${signedDelta} -> ${currentValue}`);
+        // Read signed 16-bit big-endian delta
+        const deltaHi = compressedPayload[idx];
+        const deltaLo = compressedPayload[idx + 1];
+        idx += 2;
+        
+        // Convert to signed 16-bit integer (equivalent to struct.unpack(">h"))
+        let delta = (deltaHi << 8) | deltaLo;
+        if (delta > 32767) {
+          delta = delta - 65536;  // Convert to signed
+        }
+        
+        prevVal = (prevVal + delta) & 0xFFFF;
+        samples[sampleIdx][reg] = prevVal;
+        sampleIdx += 1;
+        
+        console.log(`Register ${reg}: Delta ${delta} -> ${prevVal}`);
         
       } else {
-        throw new Error(`Invalid marker: 0x${marker.toString(16)} at register ${reg}`);
+        throw new Error(`Unknown flag 0x${flag.toString(16)}`);
       }
     }
     
-    result.push(regValues);
+    if (sampleIdx < count) {
+      throw new Error("Not enough data to fill all samples");
+    }
   }
   
-  // Convert from register-oriented to flat array (first sample of all regs, then second sample of all regs, etc.)
+  // Convert from sample-oriented to flat array (first sample of all regs, then second sample of all regs, etc.)
   const readings = [];
   for (let sample = 0; sample < count; sample++) {
     for (let reg = 0; reg < regCount; reg++) {
-      readings.push(result[reg][sample]);
+      readings.push(samples[sample][reg]);
     }
   }
   
@@ -178,8 +198,8 @@ async function storeSensorData(sensorValues) {
     const numSamples = sensorValues.length / 10;
     console.log(`Processing ${numSamples} samples with 10 sensors each`);
 
-    // Apply gain factors to convert raw values to actual sensor readings
-    const gainFactors = [10, 10, 100, 10, 10, 10, 10, 10, 1, 1]; // As per specification
+    // Apply gain factors to multiply raw values as per specification
+    const gainFactors = [10, 10, 100, 10, 10, 10, 10, 10, 1, 1]; // Multiply factors as per register specification
     
     // Create data records for each sample
     const dataRecords = [];
@@ -188,16 +208,16 @@ async function storeSensorData(sensorValues) {
       const sampleValues = sensorValues.slice(startIndex, startIndex + 10);
       
       const dataRecord = {
-        vac1: sampleValues[0] / gainFactors[0],        // L1 Phase voltage (V)
-        iac1: sampleValues[1] / gainFactors[1],        // L1 Phase current (A)
-        fac1: sampleValues[2] / gainFactors[2],        // L1 Phase frequency (Hz)
-        vpv1: sampleValues[3] / gainFactors[3],        // PV1 input voltage (V)
-        vpv2: sampleValues[4] / gainFactors[4],        // PV2 input voltage (V)
-        ipv1: sampleValues[5] / gainFactors[5],        // PV1 input current (A)
-        ipv2: sampleValues[6] / gainFactors[6],        // PV2 input current (A)
-        temperature: sampleValues[7] / gainFactors[7], // Inverter temperature (°C)
-        export_power: sampleValues[8] / gainFactors[8], // Export power percentage (%)
-        output_power: sampleValues[9] / gainFactors[9]  // Output power (W)
+        vac1: sampleValues[0] * gainFactors[0],        // L1 Phase voltage (V) - multiply by 10
+        iac1: sampleValues[1] * gainFactors[1],        // L1 Phase current (A) - multiply by 10
+        fac1: sampleValues[2] * gainFactors[2],        // L1 Phase frequency (Hz) - multiply by 100
+        vpv1: sampleValues[3] * gainFactors[3],        // PV1 input voltage (V) - multiply by 10
+        vpv2: sampleValues[4] * gainFactors[4],        // PV2 input voltage (V) - multiply by 10
+        ipv1: sampleValues[5] * gainFactors[5],        // PV1 input current (A) - multiply by 10
+        ipv2: sampleValues[6] * gainFactors[6],        // PV2 input current (A) - multiply by 10
+        temperature: sampleValues[7] * gainFactors[7], // Inverter temperature (°C) - multiply by 10
+        export_power: sampleValues[8] * gainFactors[8], // Export power percentage (%) - multiply by 1
+        output_power: sampleValues[9] * gainFactors[9]  // Output power (W) - multiply by 1
       };
       
       dataRecords.push(dataRecord);
