@@ -60,32 +60,29 @@ function parseFrameHeader(headerData) {
   }
   
   const header = {
-    compressionMethod: headerData[0],      // Byte 0: Should be 0
-    numReadings: headerData[1],            // Byte 1: Should be 5
-    valuesPerReading: headerData[2],       // Byte 2: Should be 10
-    dataLengthLow: headerData[3],          // Byte 3: Low byte of data length
-    dataLengthHigh: headerData[4]          // Byte 4: High byte of data length
+    count: (headerData[0] << 8) | headerData[1],     // Bytes 0-1: Number of samples (big-endian)
+    regCount: headerData[2],                         // Byte 2: Number of registers per sample
+    compressedSize: (headerData[3] << 8) | headerData[4] // Bytes 3-4: Compressed data size (big-endian)
   };
   
-  header.dataLength = header.dataLengthLow | (header.dataLengthHigh << 8);
+  // For compatibility with existing validation
+  header.numReadings = header.count;
+  header.valuesPerReading = header.regCount;  
+  header.dataLength = header.compressedSize;
   
   console.log('Header parsed:', header);
   
   // Validate header values
-  if (header.compressionMethod !== 0) {
-    throw new Error(`Invalid compression method: ${header.compressionMethod}`);
+  if (header.count !== 5) {
+    throw new Error(`Invalid number of samples: ${header.count}`);
   }
   
-  if (header.numReadings !== 5) {
-    throw new Error(`Invalid number of readings: ${header.numReadings}`);
+  if (header.regCount !== 10) {
+    throw new Error(`Invalid register count: ${header.regCount}`);
   }
   
-  if (header.valuesPerReading !== 10) {
-    throw new Error(`Invalid values per reading: ${header.valuesPerReading}`);
-  }
-  
-  if (header.dataLength !== EXPECTED_DATA_SIZE) {
-    throw new Error(`Invalid data length: ${header.dataLength}, expected: ${EXPECTED_DATA_SIZE}`);
+  if (header.compressedSize !== EXPECTED_DATA_SIZE) {
+    throw new Error(`Invalid compressed size: ${header.compressedSize}, expected: ${EXPECTED_DATA_SIZE}`);
   }
   
   return header;
@@ -93,61 +90,49 @@ function parseFrameHeader(headerData) {
 
 // Decompress Delta + RLE compressed data
 function decompressData(compressedPayload, header) {
-  const readings = [];
-  let offset = 0;
+  const result = [];
+  let pos = 0;
   
   console.log(`Decompressing ${compressedPayload.length} bytes using Delta + RLE`);
   
-  const registerCount = header.valuesPerReading;
+  const count = header.count;
+  const regCount = header.regCount;
   
-  for (let reg = 0; reg < registerCount; reg++) {
+  for (let reg = 0; reg < regCount; reg++) {
     const regValues = [];
     
-    // Read first 16-bit value for this register
-    if (offset + 2 > compressedPayload.length) {
+    // Read first value (2 bytes, big-endian)
+    if (pos + 2 > compressedPayload.length) {
       throw new Error(`Insufficient data for register ${reg} first value`);
     }
     
-    const firstValue = compressedPayload[offset] | (compressedPayload[offset + 1] << 8);
-    regValues.push(firstValue);
-    offset += 2;
+    let currentValue = (compressedPayload[pos] << 8) | compressedPayload[pos + 1];
+    pos += 2;
+    regValues.push(currentValue);
     
-    let currentValue = firstValue;
-    console.log(`Register ${reg}: First value = ${firstValue}`);
+    console.log(`Register ${reg}: First value = ${currentValue}`);
     
-    // Parse compressed data for remaining readings
-    const readingsForThisReg = header.numReadings - 1; // -1 because we already have first value
-    
-    for (let reading = 0; reading < readingsForThisReg; reading++) {
-      if (offset >= compressedPayload.length) {
-        throw new Error(`Insufficient data for register ${reg}, reading ${reading + 1}`);
-      }
+    // Process delta sequence until we have 'count' values
+    while (regValues.length < count && pos < compressedPayload.length) {
+      const marker = compressedPayload[pos++];
       
-      const indicator = compressedPayload[offset++];
-      
-      if (indicator === 0x00) {
-        // RLE: 0x00 + run_length = repeat previous value
-        if (offset >= compressedPayload.length) {
-          throw new Error(`Missing run length for RLE at register ${reg}`);
-        }
-        const runLength = compressedPayload[offset++];
-        
-        for (let i = 0; i < runLength && regValues.length < header.numReadings; i++) {
+      if (marker === 0x00) {
+        // RLE: Repeat current value
+        const runLength = compressedPayload[pos++];
+        for (let i = 0; i < runLength && regValues.length < count; i++) {
           regValues.push(currentValue);
         }
         console.log(`Register ${reg}: RLE repeat ${currentValue} x ${runLength}`);
+        // 🔥 CRITICAL: Check if we've completed this register
+        if (regValues.length >= count) break;
         
-      } else if (indicator === 0x01) {
-        // Delta: 0x01 + delta_hi + delta_lo = add delta to previous value
-        if (offset + 2 > compressedPayload.length) {
-          throw new Error(`Missing delta bytes for register ${reg}`);
-        }
+      } else if (marker === 0x01) {
+        // Delta: Add delta to current value
+        const deltaHi = compressedPayload[pos++];
+        const deltaLo = compressedPayload[pos++];
+        const delta = (deltaHi << 8) | deltaLo;
         
-        const deltaLo = compressedPayload[offset++];
-        const deltaHi = compressedPayload[offset++];
-        const delta = deltaLo | (deltaHi << 8);
-        
-        // Handle signed delta (16-bit signed)
+        // Handle signed delta (16-bit two's complement)
         const signedDelta = delta > 32767 ? delta - 65536 : delta;
         currentValue = (currentValue + signedDelta) & 0xFFFF;
         regValues.push(currentValue);
@@ -155,11 +140,19 @@ function decompressData(compressedPayload, header) {
         console.log(`Register ${reg}: Delta ${signedDelta} -> ${currentValue}`);
         
       } else {
-        throw new Error(`Unknown compression indicator: 0x${indicator.toString(16)} at register ${reg}`);
+        throw new Error(`Invalid marker: 0x${marker.toString(16)} at register ${reg}`);
       }
     }
     
-    readings.push(...regValues);
+    result.push(regValues);
+  }
+  
+  // Convert from register-oriented to flat array (first sample of all regs, then second sample of all regs, etc.)
+  const readings = [];
+  for (let sample = 0; sample < count; sample++) {
+    for (let reg = 0; reg < regCount; reg++) {
+      readings.push(result[reg][sample]);
+    }
   }
   
   console.log(`Decompressed ${readings.length} total values`);
