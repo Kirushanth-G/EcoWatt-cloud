@@ -91,44 +91,87 @@ function parseFrameHeader(headerData) {
   return header;
 }
 
-// Decompress data according to the specific format: [low_byte, high_byte, 0, 4] per value
-function decompressData(compressedPayload) {
+// Decompress Delta + RLE compressed data
+function decompressData(compressedPayload, header) {
   const readings = [];
+  let offset = 0;
   
-  console.log(`Decompressing ${compressedPayload.length} bytes of compressed data`);
+  console.log(`Decompressing ${compressedPayload.length} bytes using Delta + RLE`);
   
-  // Each value is 4 bytes: [low_byte, high_byte, 0, 4]
-  // Total values = 40 bytes / 4 bytes per value = 10 values
-  const expectedValues = 10;
-  const bytesPerValue = 4;
+  const registerCount = header.valuesPerReading;
   
-  if (compressedPayload.length !== expectedValues * bytesPerValue) {
-    throw new Error(`Invalid compressed data length: ${compressedPayload.length}, expected: ${expectedValues * bytesPerValue}`);
+  for (let reg = 0; reg < registerCount; reg++) {
+    const regValues = [];
+    
+    // Read first 16-bit value for this register
+    if (offset + 2 > compressedPayload.length) {
+      throw new Error(`Insufficient data for register ${reg} first value`);
+    }
+    
+    const firstValue = compressedPayload[offset] | (compressedPayload[offset + 1] << 8);
+    regValues.push(firstValue);
+    offset += 2;
+    
+    let currentValue = firstValue;
+    console.log(`Register ${reg}: First value = ${firstValue}`);
+    
+    // Parse compressed data for remaining readings
+    const readingsForThisReg = header.numReadings - 1; // -1 because we already have first value
+    
+    for (let reading = 0; reading < readingsForThisReg; reading++) {
+      if (offset >= compressedPayload.length) {
+        throw new Error(`Insufficient data for register ${reg}, reading ${reading + 1}`);
+      }
+      
+      const indicator = compressedPayload[offset++];
+      
+      if (indicator === 0x00) {
+        // RLE: 0x00 + run_length = repeat previous value
+        if (offset >= compressedPayload.length) {
+          throw new Error(`Missing run length for RLE at register ${reg}`);
+        }
+        const runLength = compressedPayload[offset++];
+        
+        for (let i = 0; i < runLength && regValues.length < header.numReadings; i++) {
+          regValues.push(currentValue);
+        }
+        console.log(`Register ${reg}: RLE repeat ${currentValue} x ${runLength}`);
+        
+      } else if (indicator === 0x01) {
+        // Delta: 0x01 + delta_hi + delta_lo = add delta to previous value
+        if (offset + 2 > compressedPayload.length) {
+          throw new Error(`Missing delta bytes for register ${reg}`);
+        }
+        
+        const deltaLo = compressedPayload[offset++];
+        const deltaHi = compressedPayload[offset++];
+        const delta = deltaLo | (deltaHi << 8);
+        
+        // Handle signed delta (16-bit signed)
+        const signedDelta = delta > 32767 ? delta - 65536 : delta;
+        currentValue = (currentValue + signedDelta) & 0xFFFF;
+        regValues.push(currentValue);
+        
+        console.log(`Register ${reg}: Delta ${signedDelta} -> ${currentValue}`);
+        
+      } else {
+        throw new Error(`Unknown compression indicator: 0x${indicator.toString(16)} at register ${reg}`);
+      }
+    }
+    
+    readings.push(...regValues);
   }
   
-  for (let i = 0; i < compressedPayload.length; i += bytesPerValue) {
-    const lowByte = compressedPayload[i];
-    const highByte = compressedPayload[i + 1];
-    const padding1 = compressedPayload[i + 2]; // Should be 0
-    const padding2 = compressedPayload[i + 3]; // Should be 4
-    
-    // Reconstruct the original 16-bit value
-    const value = lowByte | (highByte << 8);
-    readings.push(value);
-    
-    console.log(`Value ${readings.length}: ${value} (bytes: ${lowByte}, ${highByte}, ${padding1}, ${padding2})`);
-  }
-  
-  console.log(`Decompressed ${readings.length} values:`, readings);
+  console.log(`Decompressed ${readings.length} total values`);
   return readings;
 }
 
 // Store sensor data in database
-async function storeSensorData(sensorValues, deviceId = "ecowatt_device") {
+async function storeSensorData(sensorValues) {
   try {
-    // Validate input
-    if (!Array.isArray(sensorValues) || sensorValues.length === 0) {
-      throw new Error('Invalid sensor values provided');
+    // Validate input - expect exactly 10 sensor readings
+    if (!Array.isArray(sensorValues) || sensorValues.length !== 10) {
+      throw new Error(`Expected 10 sensor values, received ${sensorValues?.length || 0}`);
     }
 
     // Check if Supabase client is properly configured
@@ -137,37 +180,33 @@ async function storeSensorData(sensorValues, deviceId = "ecowatt_device") {
       return { success: true, message: 'Database storage skipped - environment not configured' };
     }
 
-    const timestamp = new Date().toISOString();
+    // Apply gain factors to convert raw values to actual sensor readings
+    const gainFactors = [10, 10, 100, 10, 10, 10, 10, 10, 1, 1]; // As per specification
     
-    // Structure data according to Prisma schema
     const dataRecord = {
-      deviceId: deviceId, // Match Prisma schema field name
-      compressedPayload: {
-        timestamp: timestamp,
-        sensor_values: sensorValues, // Store the 10 sensor values
-        frame_info: {
-          total_values: sensorValues.length,
-          expected_values: 10,
-          compression_method: 0,
-          frame_size: EXPECTED_FRAME_SIZE,
-          data_size: EXPECTED_DATA_SIZE
-        },
-        processing_info: {
-          crc_algorithm: 'CRC16-MODBUS',
-          polynomial: '0xA001',
-          processing_timestamp: timestamp,
-          api_version: '1.0'
-        }
-      },
-      originalSize: sensorValues.length * 2, // 2 bytes per value originally
-      compressedSize: EXPECTED_DATA_SIZE // 40 bytes compressed
-      // createdAt is auto-generated, don't specify it
+      vac1: sensorValues[0] / gainFactors[0],        // L1 Phase voltage (V)
+      iac1: sensorValues[1] / gainFactors[1],        // L1 Phase current (A)
+      fac1: sensorValues[2] / gainFactors[2],        // L1 Phase frequency (Hz)
+      vpv1: sensorValues[3] / gainFactors[3],        // PV1 input voltage (V)
+      vpv2: sensorValues[4] / gainFactors[4],        // PV2 input voltage (V)
+      ipv1: sensorValues[5] / gainFactors[5],        // PV1 input current (A)
+      ipv2: sensorValues[6] / gainFactors[6],        // PV2 input current (A)
+      temperature: sensorValues[7] / gainFactors[7], // Inverter temperature (°C)
+      export_power: sensorValues[8] / gainFactors[8], // Export power percentage (%)
+      output_power: sensorValues[9] / gainFactors[9]  // Output power (W)
     };
     
-    console.log('Preparing to store data record:', {
-      deviceId: dataRecord.deviceId,
-      valuesCount: sensorValues.length,
-      values: sensorValues
+    console.log('Storing sensor readings:', {
+      vac1: dataRecord.vac1,
+      iac1: dataRecord.iac1,
+      fac1: dataRecord.fac1,
+      vpv1: dataRecord.vpv1,
+      vpv2: dataRecord.vpv2,
+      ipv1: dataRecord.ipv1,
+      ipv2: dataRecord.ipv2,
+      temperature: dataRecord.temperature,
+      export_power: dataRecord.export_power,
+      output_power: dataRecord.output_power
     });
     
     const { data, error } = await supabase
@@ -176,27 +215,15 @@ async function storeSensorData(sensorValues, deviceId = "ecowatt_device") {
       .select();
 
     if (error) {
-      console.error("Database insert error details:", {
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code
-      });
-      
-      // Don't fail the entire request for database issues in production
-      console.warn('Database storage failed, but API processing was successful');
+      console.error("Database insert error:", error);
       return { 
         success: false, 
         error: error.message,
-        sensor_values: sensorValues // Still return the processed values
+        sensor_values: sensorValues
       };
     }
     
-    console.log(`✅ Successfully stored sensor data for device ${deviceId}:`, {
-      id: data[0]?.id,
-      deviceId: data[0]?.deviceId,
-      valuesStored: sensorValues.length
-    });
+    console.log(`✅ Successfully stored sensor readings`);
     
     return { success: true, data: data[0], sensor_values: sensorValues };
     
@@ -205,7 +232,7 @@ async function storeSensorData(sensorValues, deviceId = "ecowatt_device") {
     return { 
       success: false, 
       error: error.message,
-      sensor_values: sensorValues // Still return the processed values
+      sensor_values: sensorValues
     };
   }
 }
@@ -283,7 +310,7 @@ export async function POST(req) {
     // Step 8: Decompress data to extract sensor values
     let sensorValues;
     try {
-      sensorValues = decompressData(compressedPayload);
+      sensorValues = decompressData(compressedPayload, header);
     } catch (error) {
       console.error('Decompression failed:', error.message);
       return NextResponse.json(

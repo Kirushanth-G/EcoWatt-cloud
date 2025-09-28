@@ -1,11 +1,5 @@
 "use client";
 import { useEffect, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
 
 export default function DataPage() {
   const [rows, setRows] = useState([]);
@@ -16,20 +10,22 @@ export default function DataPage() {
     async function fetchData() {
       try {
         setLoading(true);
-        let { data, error } = await supabase
-          .from("eco_data")
-          .select("*")
-          .order("created_at", { ascending: false });
+        setError(null);
         
-        if (error) {
-          console.error("Fetch error:", error);
-          setError(error.message);
-        } else {
-          setRows(data || []);
+        const response = await fetch('/api/data');
+        const result = await response.json();
+        
+        if (!response.ok || !result.success) {
+          setError(result.error || result.message || 'Failed to fetch data');
+          return;
         }
+        
+        setRows(result.data || []);
+        console.log(`Loaded ${result.count} records from database`);
+        
       } catch (err) {
-        console.error("Unexpected error:", err);
-        setError(err.message);
+        console.error("Fetch error:", err);
+        setError(`Network error: ${err.message}. Unable to connect to the API.`);
       } finally {
         setLoading(false);
       }
@@ -37,17 +33,7 @@ export default function DataPage() {
     fetchData();
   }, []);
 
-  const formatPayloadPreview = (payload) => {
-    if (!payload) return "N/A";
-    const str = JSON.stringify(payload);
-    return str.length > 100 ? str.substring(0, 100) + "..." : str;
-  };
 
-  const calculateCompressionRatio = (original, compressed) => {
-    if (!original || !compressed) return "N/A";
-    const ratio = ((original - compressed) / original * 100).toFixed(1);
-    return `${ratio}%`;
-  };
 
   if (loading) {
     return (
@@ -62,8 +48,40 @@ export default function DataPage() {
   if (error) {
     return (
       <div className="p-6">
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-          Error loading data: {error}
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+          <h2 className="text-lg font-semibold text-yellow-800 mb-2">Database Connection Issue</h2>
+          <p className="text-yellow-700 mb-4">{error}</p>
+          
+          {error.includes("not configured") ? (
+            <div className="bg-yellow-100 p-4 rounded border border-yellow-300">
+              <h3 className="font-semibold text-yellow-800 mb-2">Setup Required:</h3>
+              <p className="text-yellow-700 text-sm">
+                The Supabase database connection is not configured. To view stored data:
+              </p>
+              <ol className="list-decimal list-inside text-yellow-700 text-sm mt-2 space-y-1">
+                <li>Set up your environment variables in <code>.env</code></li>
+                <li>Make sure <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> are set</li>
+                <li>Restart the development server</li>
+              </ol>
+            </div>
+          ) : (
+            <div className="bg-yellow-100 p-4 rounded border border-yellow-300">
+              <h3 className="font-semibold text-yellow-800 mb-2">Troubleshooting:</h3>
+              <ul className="list-disc list-inside text-yellow-700 text-sm space-y-1">
+                <li>Check your internet connection</li>
+                <li>Verify Supabase service is accessible</li>
+                <li>Check if environment variables are correctly set</li>
+                <li>Try refreshing the page</li>
+              </ul>
+            </div>
+          )}
+          
+          <button 
+            onClick={() => window.location.reload()} 
+            className="mt-4 px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700"
+          >
+            Retry Connection
+          </button>
         </div>
       </div>
     );
@@ -80,7 +98,7 @@ export default function DataPage() {
 
       {rows.length === 0 ? (
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-8 text-center">
-          <div className="text-gray-500 text-lg">No data uploaded yet</div>
+          <div className="text-gray-500 text-lg">No sensor data available</div>
           <div className="text-gray-400 text-sm mt-2">
             Waiting for EcoWatt devices to send data...
           </div>
@@ -90,49 +108,75 @@ export default function DataPage() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Device ID
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Phase Voltage (V)
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Payload Preview
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Phase Current (A)
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Original Size (bytes)
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Frequency (Hz)
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Compressed Size (bytes)
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  PV1 Voltage (V)
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Compression Ratio
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  PV1 Current (A)
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Uploaded At
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  PV2 Voltage (V)
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  PV2 Current (A)
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Temperature (°C)
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Export Power (W)
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Output Power (W)
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Timestamp
                 </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {rows.map((row, index) => (
                 <tr key={row.id} className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    {row.device_id}
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.vac1 !== null ? `${(row.vac1 / 10).toFixed(1)}` : "N/A"}
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
-                    <div className="font-mono text-xs bg-gray-100 p-2 rounded">
-                      {formatPayloadPreview(row.compressed_payload)}
-                    </div>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.iac1 !== null ? `${(row.iac1 / 10).toFixed(1)}` : "N/A"}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {row.original_size ? row.original_size.toLocaleString() : "N/A"}
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.fac1 !== null ? `${(row.fac1 / 100).toFixed(2)}` : "N/A"}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {row.compressed_size ? row.compressed_size.toLocaleString() : "N/A"}
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.vpv1 !== null ? `${(row.vpv1 / 10).toFixed(1)}` : "N/A"}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      {calculateCompressionRatio(row.original_size, row.compressed_size)}
-                    </span>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.ipv1 !== null ? `${(row.ipv1 / 10).toFixed(1)}` : "N/A"}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.vpv2 !== null ? `${(row.vpv2 / 10).toFixed(1)}` : "N/A"}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.ipv2 !== null ? `${(row.ipv2 / 10).toFixed(1)}` : "N/A"}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.temperature !== null ? `${(row.temperature / 10).toFixed(1)}` : "N/A"}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.export_power !== null ? `${row.export_power}` : "N/A"}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                    {row.output_power !== null ? `${row.output_power}` : "N/A"}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                     {new Date(row.created_at).toLocaleString()}
                   </td>
                 </tr>

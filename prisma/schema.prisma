@@ -16,10 +16,16 @@ datasource db {
 
 model EcoData {
   id                BigInt   @id @default(autoincrement())
-  deviceId          String   @map("device_id")
-  compressedPayload Json     @map("compressed_payload")
-  originalSize      Int?     @map("original_size")
-  compressedSize    Int?     @map("compressed_size")
+  vac1              Float    @map("vac1")              // L1 Phase voltage (V)
+  iac1              Float    @map("iac1")              // L1 Phase current (A)
+  fac1              Float    @map("fac1")              // L1 Phase frequency (Hz)
+  vpv1              Float    @map("vpv1")              // PV1 input voltage (V)
+  vpv2              Float    @map("vpv2")              // PV2 input voltage (V)
+  ipv1              Float    @map("ipv1")              // PV1 input current (A)
+  ipv2              Float    @map("ipv2")              // PV2 input current (A)
+  temperature       Float    @map("temperature")       // Inverter internal temperature (°C)
+  exportPower       Float    @map("export_power")      // Export power percentage (%)
+  outputPower       Float    @map("output_power")      // Inverter current output power (W)
   createdAt         DateTime @default(now()) @map("created_at")
 
   @@map("eco_data")
