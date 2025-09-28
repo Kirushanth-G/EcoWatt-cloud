@@ -127,10 +127,13 @@ function decompressData(compressedPayload, header) {
         if (idx + 2 > compressedPayload.length) {
           throw new Error("Truncated delta");
         }
-        const delta = (compressedPayload[idx] << 8) | compressedPayload[idx + 1];
+        // Read signed 16-bit big-endian delta
+        const deltaHi = compressedPayload[idx];
+        const deltaLo = compressedPayload[idx + 1];
         idx += 2;
-        // Signed 16-bit big-endian
-        let signedDelta = delta > 32767 ? delta - 65536 : delta;
+        // struct.unpack('>h', ...) equivalent
+        let signedDelta = (deltaHi << 8) | deltaLo;
+        if (signedDelta & 0x8000) signedDelta = signedDelta - 0x10000;
         prevVal = (prevVal + signedDelta) & 0xFFFF;
         samples[sampleIdx][reg] = prevVal;
         sampleIdx += 1;
