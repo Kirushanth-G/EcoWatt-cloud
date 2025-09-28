@@ -347,12 +347,6 @@ export async function POST(req) {
     // Step 11: Generate success response (always succeed if processing worked)
     const responseData = {
       status: "success",
-      frame: "ace5000000000000", // Simple confirmation hex data
-      values_processed: sensorValues.length,
-      samples_processed: sensorValues.length / 10,
-      values: sensorValues, // Include the actual sensor values
-      timestamp: new Date().toISOString(),
-      storage: storageResult.success ? "stored" : "processing_only",
       storage_info: storageResult.success ? `${storageResult.samples_stored || 0} samples stored in database` : `Processing successful, storage skipped: ${storageResult.error || 'Environment not configured'}`
     };
 
