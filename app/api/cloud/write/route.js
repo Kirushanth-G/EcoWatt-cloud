@@ -124,7 +124,7 @@ function decompressData(compressedPayload, header) {
           regValues.push(currentValue);
         }
         console.log(`Register ${reg}: RLE repeat ${currentValue} x ${runLength}`);
-        // 🔥 CRITICAL: Check if we've completed this register
+        // 🔥 CRITICAL: Break if register is complete
         if (regValues.length >= count) break;
         
       } else if (marker === 0x01) {
@@ -135,7 +135,7 @@ function decompressData(compressedPayload, header) {
         
         // Handle signed delta (16-bit two's complement)
         const signedDelta = delta > 32767 ? delta - 65536 : delta;
-        currentValue = (currentValue + signedDelta) & 0xFFFF;
+        currentValue += signedDelta;
         regValues.push(currentValue);
         
         console.log(`Register ${reg}: Delta ${signedDelta} -> ${currentValue}`);
