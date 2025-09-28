@@ -9,7 +9,8 @@ const supabase = createClient(
 
 // Configuration constants
 const EXPECTED_API_KEY = "ColdPlay2025";
-const EXPECTED_FRAME_SIZE = 47; // 5 bytes header + 40 bytes data + 2 bytes CRC
+const EXPECTED_FRAME_SIZE = 48; // 1 byte metadata + 5 bytes header + 40 bytes data + 2 bytes CRC
+const EXPECTED_METADATA_SIZE = 1;
 const EXPECTED_HEADER_SIZE = 5;
 const EXPECTED_DATA_SIZE = 40;
 const EXPECTED_CRC_SIZE = 2;
@@ -275,7 +276,7 @@ export async function POST(req) {
     console.log(`Received frame: ${frame.length} bytes`);
     console.log(`Frame hex: ${Array.from(frame).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
 
-    // Step 4: Validate frame size (47 bytes total)
+    // Step 4: Validate frame size (48 bytes total)
     if (frame.length !== EXPECTED_FRAME_SIZE) {
       console.error(`Invalid frame size: ${frame.length}, expected: ${EXPECTED_FRAME_SIZE}`);
       return NextResponse.json(
@@ -294,15 +295,26 @@ export async function POST(req) {
     }
 
     // Step 6: Extract components (remove CRC to get data)
-    const dataWithoutCRC = frame.slice(0, -EXPECTED_CRC_SIZE); // First 45 bytes
-    const headerData = dataWithoutCRC.slice(0, EXPECTED_HEADER_SIZE); // First 5 bytes
-    const compressedPayload = dataWithoutCRC.slice(EXPECTED_HEADER_SIZE); // Next 40 bytes
+    const dataWithoutCRC = frame.slice(0, -EXPECTED_CRC_SIZE); // First 46 bytes
+    const metadataFlag = dataWithoutCRC[0]; // First byte
+    const headerData = dataWithoutCRC.slice(EXPECTED_METADATA_SIZE, EXPECTED_METADATA_SIZE + EXPECTED_HEADER_SIZE); // Bytes 1-5
+    const compressedPayload = dataWithoutCRC.slice(EXPECTED_METADATA_SIZE + EXPECTED_HEADER_SIZE); // Next 40 bytes
 
     console.log(`Data without CRC: ${dataWithoutCRC.length} bytes`);
+    console.log(`Metadata flag: 0x${metadataFlag.toString(16).padStart(2, '0')}`);
     console.log(`Header: ${headerData.length} bytes`);
     console.log(`Compressed payload: ${compressedPayload.length} bytes`);
 
-    // Step 7: Parse and validate header
+    // Step 7: Validate metadata flag (0x00 = raw compression, 0x01 = aggregated)
+    if (metadataFlag !== 0x00) {
+      console.error(`Unsupported metadata flag: 0x${metadataFlag.toString(16)}`);
+      return NextResponse.json(
+        { error: "Only raw compression data supported" },
+        { status: 400 }
+      );
+    }
+
+    // Step 8: Parse and validate header
     let header;
     try {
       header = parseFrameHeader(headerData);
@@ -314,7 +326,7 @@ export async function POST(req) {
       );
     }
 
-    // Step 8: Decompress data to extract sensor values
+    // Step 9: Decompress data to extract sensor values
     let sensorValues;
     try {
       sensorValues = decompressData(compressedPayload, header);
@@ -328,11 +340,11 @@ export async function POST(req) {
 
     console.log(`Extracted ${sensorValues.length} sensor values:`, sensorValues);
 
-    // Step 9: Store data in database (graceful handling)
+    // Step 10: Store data in database (graceful handling)
     console.log(`\n=== Storing ${sensorValues.length} sensor values ===`);
     const storageResult = await storeSensorData(sensorValues);
     
-    // Step 10: Generate success response (always succeed if processing worked)
+    // Step 11: Generate success response (always succeed if processing worked)
     const responseData = {
       status: "success",
       frame: "ace5000000000000", // Simple confirmation hex data

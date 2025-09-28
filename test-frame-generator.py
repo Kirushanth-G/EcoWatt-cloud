@@ -21,7 +21,10 @@ def calculate_crc16_modbus(data):
     return crc & 0xFFFF
 
 def create_test_frame():
-    """Create a 47-byte test frame with header + compressed data + CRC"""
+    """Create a 48-byte test frame matching device implementation: metadata + header + compressed data + CRC"""
+    
+    # Metadata flag (1 byte) - matches scheduler.cpp line 341
+    metadata_flag = 0x00  # Raw compression flag (0x01 would be aggregated)
     
     # Header (5 bytes): count (big-endian), reg_count, compressed_size (big-endian)
     count = 5               # Number of samples
@@ -62,17 +65,18 @@ def create_test_frame():
     
     # Total: 10 registers × (2 + 2) = 40 bytes
     
-    # Combine header + data
-    frame_without_crc = header + compressed_data
+    # Combine metadata + header + data (matches scheduler.cpp implementation)
+    frame_without_crc = struct.pack('B', metadata_flag) + header + compressed_data
     
-    # Calculate CRC
+    # Calculate CRC (matches calculateCRC function)
     crc = calculate_crc16_modbus(frame_without_crc)
-    crc_bytes = struct.pack('<H', crc)  # Little-endian CRC
+    crc_bytes = struct.pack('<H', crc)  # Little-endian CRC (matches append_crc_to_upload_frame)
     
-    # Complete frame
+    # Complete frame: metadata + header + data + crc
     complete_frame = frame_without_crc + crc_bytes
     
-    print(f"Frame breakdown:")
+    print(f"Frame breakdown (matches device implementation):")
+    print(f"  Metadata (1 byte): {struct.pack('B', metadata_flag).hex(' ')}")
     print(f"  Header (5 bytes): {header.hex(' ')}")
     print(f"  Data (40 bytes): {compressed_data.hex(' ')}")
     print(f"  CRC (2 bytes): {crc_bytes.hex(' ')}")
@@ -89,8 +93,8 @@ if __name__ == "__main__":
         f.write(frame)
     
     print(f"\nTest frame saved to 'test_frame.bin'")
-    print(f"\nCurl command:")
-    print(f"curl -X POST http://localhost:3000/api/cloud/write \\")
+    print(f"\nCurl command (matches device Authorization header):")
+    print(f"curl -X POST https://eco-watt-cloud.vercel.app/api/cloud/write \\")
     print(f"  -H 'Content-Type: application/octet-stream' \\")
     print(f"  -H 'Authorization: ColdPlay2025' \\")
     print(f"  --data-binary '@test_frame.bin'")
