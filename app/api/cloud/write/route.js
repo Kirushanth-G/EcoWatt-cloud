@@ -8,7 +8,7 @@ const supabase = createClient(
 );
 
 // Configuration constants
-const EXPECTED_API_KEY = "ColdPlay2025";
+const EXPECTED_API_KEY = "Ecoo";
 const EXPECTED_FRAME_SIZE = 48; // 1 byte metadata + 5 bytes header + 40 bytes data + 2 bytes CRC
 const EXPECTED_METADATA_SIZE = 1;
 const EXPECTED_HEADER_SIZE = 5;
