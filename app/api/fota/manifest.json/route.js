@@ -5,7 +5,7 @@ import path from "path";
 export async function GET() {
   try {
     // Path to the JSON file inside /manifest.json
-    const filePath = path.join(process.cwd(), "manifest.json");
+    const filePath = path.join(process.cwd(), "/app/api/fota/manifest.json/manifest.json");
 
     // Read the JSON file contents
     const fileContents = await fs.readFile(filePath, "utf-8");
