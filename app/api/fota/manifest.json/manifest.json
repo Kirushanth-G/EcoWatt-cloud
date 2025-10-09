@@ -1,0 +1,7 @@
+{
+  "job_id": "0",
+  "fwUrl": "https://eco-watt-cloud.vercel.app/api/fota/chunk",
+  "fwSize": "1000KB",
+  "shaExpected": "",
+  "chunkSize": "1KB"
+}
