@@ -1,19 +1,30 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
+import { createHash } from "crypto";
 import path from "path";
 
 export async function GET() {
   try {
+
+    const filePath = path.join(process.cwd(), "public", "firmware.bin");
+    const stats = await fs.stat(filePath);
+    const fileSize = stats.size; // size in bytes
+    const fileBuffer = await fs.readFile(filePath);
+    const hash = createHash("sha256");
+    hash.update(fileBuffer);
+    const sha256 = hash.digest("hex");
+
     const data = {
       job_id: "0",
       fwUrl: "https://eco-watt-cloud.vercel.app/api/fota/firmware",
-      fwSize: "",
-      shaExpected: ""
+      fwSize: fileSize,
+      shaExpected: sha256
     };
-    // Path to the JSON file inside /manifest.json
-    const filePath = path.join(process.cwd(), "public", "manifest.json");
 
     const jsonString = JSON.stringify(data, null, 2); // pretty print with 2 spaces
+
+    // // Path to the JSON file inside /manifest.json
+    // const filePath = path.join(process.cwd(), "public", "manifest.json");
     // Write the file
     // await fs.writeFile(filePath, jsonString, "utf-8");
 
