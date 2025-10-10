@@ -15,12 +15,13 @@ export async function GET() {
 
     const jsonString = JSON.stringify(data, null, 2); // pretty print with 2 spaces
     // Write the file
-    await fs.writeFile(filePath, jsonString, "utf-8");
+    // await fs.writeFile(filePath, jsonString, "utf-8");
 
-    // Read the JSON file contents
-    const fileContents = await fs.readFile(filePath, "utf-8");
-    const jsonData = JSON.parse(fileContents);
+    // // Read the JSON file contents
+    // const fileContents = await fs.readFile(filePath, "utf-8");
+    // const jsonData = JSON.parse(fileContents);
 
+    const jsonData = JSON.parse(jsonString);
     // Return it as a JSON response
     return NextResponse.json(jsonData, { status: 200 });
   } catch (error) {
