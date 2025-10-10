@@ -4,8 +4,18 @@ import path from "path";
 
 export async function GET() {
   try {
+    const data = {
+      job_id: "0",
+      fwUrl: "https://eco-watt-cloud.vercel.app/api/fota/firmware",
+      fwSize: "",
+      shaExpected: ""
+    };
     // Path to the JSON file inside /manifest.json
     const filePath = path.join(process.cwd(), "public", "manifest.json");
+
+    const jsonString = JSON.stringify(data, null, 2); // pretty print with 2 spaces
+    // Write the file
+    await fs.writeFile(filePath, jsonString, "utf-8");
 
     // Read the JSON file contents
     const fileContents = await fs.readFile(filePath, "utf-8");
