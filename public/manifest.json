@@ -1,7 +1,7 @@
 {
   "job_id": "0",
   "fwUrl": "https://eco-watt-cloud.vercel.app/api/fota/chunk",
-  "fwSize": "1000KB",
-  "shaExpected": "",
-  "chunkSize": "1KB"
+  "fwSize": "1000",
+  "shaExpected": "b2982650933bc5dd35653735bbc442f040b150b3e9876ef7aadce2ce4e0fe23f",
+  "no_of_chunks": "10"
 }
