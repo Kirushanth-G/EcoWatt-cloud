@@ -1,52 +1,51 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
-import { createHash } from "crypto";
+import { createHash, createSign } from "crypto";
 import path from "path";
 
 export async function GET() {
   try {
-
-    let fw = ["normal", "corrupted"]
+    // Randomly choose firmware
+    let fw = ["normal", "corrupted"];
     fw = fw[Math.floor(Math.random() * fw.length)];
-    if (fw == "normal") {
-      fw = "firmware"
-    } else {
-      fw = "corrupted_firmware"
-    }
+    fw = fw === "normal" ? "firmware" : "corrupted_firmware";
+
     const filePath = path.join(process.cwd(), "public", fw + ".bin");
+
+    // File size and SHA-256 hash
     const stats = await fs.stat(filePath);
-    const fileSize = stats.size; // size in bytes
+    const fileSize = stats.size;
     const fileBuffer = await fs.readFile(filePath);
     const hash = createHash("sha256");
     hash.update(fileBuffer);
     const sha256 = hash.digest("hex");
 
-    const data = {
+    // Create JSON data
+    const jsonData = {
       job_id: "0",
-      fwUrl: "https://eco-watt-cloud.vercel.app/api/fota/"+fw,
+      fwUrl: "https://eco-watt-cloud.vercel.app/api/fota/" + fw,
       fwSize: fileSize,
       shaExpected: sha256
     };
 
-    const jsonString = JSON.stringify(data, null, 2); // pretty print with 2 spaces
+    // Read private key
+    const keyPath = path.join(process.cwd(), "private", "ecdsa_private.pem");
+    const privateKey = await fs.readFile(keyPath, "utf-8");
 
-    // // Path to the JSON file inside /manifest.json
-    // const filePath = path.join(process.cwd(), "public", "manifest.json");
-    // Write the file
-    // await fs.writeFile(filePath, jsonString, "utf-8");
+    // Sign JSON
+    const signer = createSign("SHA256");
+    signer.update(JSON.stringify(jsonData)); // must stringify
+    signer.end();
+    const signature = signer.sign(privateKey, "base64");
 
-    // // Read the JSON file contents
-    // const fileContents = await fs.readFile(filePath, "utf-8");
-    // const jsonData = JSON.parse(fileContents);
+    // Add signature to JSON
+    jsonData.signature = signature;
 
-    const jsonData = JSON.parse(jsonString);
-    // Return it as a JSON response
+    // Return JSON response
     return NextResponse.json(jsonData, { status: 200 });
+
   } catch (error) {
-    console.error("Error reading manifest.json:", error);
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    console.error("Error generating manifest:", error);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
