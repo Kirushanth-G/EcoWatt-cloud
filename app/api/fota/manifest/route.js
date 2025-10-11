@@ -6,7 +6,14 @@ import path from "path";
 export async function GET() {
   try {
 
-    const filePath = path.join(process.cwd(), "public", "firmware.bin");
+    let fw = ["normal", "corrupted"]
+    fw = fw[Math.floor(Math.random() * fw.length)];
+    if (fw == "normal") {
+      fw = "firmware"
+    } else {
+      fw = "corrupted_firmware"
+    }
+    const filePath = path.join(process.cwd(), "public", fw + ".bin");
     const stats = await fs.stat(filePath);
     const fileSize = stats.size; // size in bytes
     const fileBuffer = await fs.readFile(filePath);
@@ -16,7 +23,7 @@ export async function GET() {
 
     const data = {
       job_id: "0",
-      fwUrl: "https://eco-watt-cloud.vercel.app/api/fota/firmware",
+      fwUrl: "https://eco-watt-cloud.vercel.app/api/fota/"+fw,
       fwSize: fileSize,
       shaExpected: sha256
     };
