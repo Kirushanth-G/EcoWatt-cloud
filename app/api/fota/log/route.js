@@ -9,7 +9,7 @@ export async function POST(request) {
 
     // Define where to save the file
     const uploadsDir = path.join(process.cwd(), "private", "fota_logs");
-    await fs.mkdir(uploadsDir, { recursive: true }); // ensure directory exists
+    // await fs.mkdir(uploadsDir, { recursive: true }); // ensure directory exists
 
     // Timestamped file name
     const filename = `log_${Date.now()}.txt`;

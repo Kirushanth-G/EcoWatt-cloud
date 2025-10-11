@@ -1,0 +1,1 @@
+Hello from curl! This is a test log entry.
