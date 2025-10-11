@@ -16,7 +16,7 @@ export async function POST(request) {
     const filePath = path.join(uploadsDir, filename);
 
     // Write file to disk
-    await fs.writeFile(filePath, body, "utf-8");
+    // await fs.writeFile(filePath, body, "utf-8");
 
     return new Response(JSON.stringify({ success: true, file: filename }), {
       status: 200,
