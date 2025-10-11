@@ -6,9 +6,9 @@ import path from "path";
 export async function GET() {
   try {
     // Randomly choose firmware
-    let fw = ["normal", "corrupted"];
+    let fw = ["normal", "garbage", "guru"];
     fw = fw[Math.floor(Math.random() * fw.length)];
-    fw = fw === "normal" ? "firmware" : "corrupted_firmware";
+    fw = fw === "normal" ? "firmware" : (fw === "garbage" ? "garbage_firmware" : "guru_firmware");
 
     const filePath = path.join(process.cwd(), "public", fw + ".bin");
 

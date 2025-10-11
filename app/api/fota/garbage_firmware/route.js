@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 export async function GET(req) {
   try {
     // Path to the binary file
-    const filePath = path.join(process.cwd(), "public", "corrupted_firmware.bin");
+    const filePath = path.join(process.cwd(), "public", "garbage_firmware.bin");
     const fileStat = await fs.stat(filePath);
     const fileSize = fileStat.size;
 
