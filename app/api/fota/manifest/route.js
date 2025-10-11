@@ -6,6 +6,7 @@ import path from "path";
 export async function GET() {
   try {
     // Randomly choose firmware
+    const job_id = Math.floor(Math.random() * 3);
     let fw = ["normal", "garbage", "guru"];
     fw = fw[Math.floor(Math.random() * (fw.length-1))]; // modify this to include guru_firmware as well
     fw = fw === "normal" ? "firmware" : (fw === "garbage" ? "garbage_firmware" : "guru_firmware");
@@ -22,7 +23,7 @@ export async function GET() {
 
     // Create JSON data
     const jsonData = {
-      job_id: "0",
+      job_id: job_id,
       fwUrl: "https://eco-watt-cloud.vercel.app/api/fota/" + fw,
       fwSize: fileSize,
       shaExpected: sha256
