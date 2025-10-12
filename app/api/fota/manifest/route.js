@@ -8,7 +8,7 @@ export async function GET() {
     // Randomly choose firmware
     const job_id = Math.floor(Math.random() * 3);
     let fw = ["normal", "garbage", "guru"];
-    fw = fw[Math.floor(Math.random() * (fw.length))]; // modify this to include guru_firmware as well
+    fw = fw[Math.floor(Math.random() * (fw.length-1))]; // modify this to include guru_firmware as well
     fw = fw === "normal" ? "firmware" : (fw === "garbage" ? "garbage_firmware" : "guru_firmware");
 
     const filePath = path.join(process.cwd(), "public", fw + ".bin");
