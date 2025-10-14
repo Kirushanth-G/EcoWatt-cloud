@@ -31,3 +31,16 @@ model EcoData {
   @@map("eco_data")
 }
 
+model ConfigurationLog {
+  id                BigInt   @id @default(autoincrement())
+  deviceId          String?  @map("device_id")         // Optional device identifier
+  configSent        Json     @map("config_sent")       // Configuration sent to device
+  deviceResponse    Json?    @map("device_response")   // Device acknowledgment response
+  status            String   @map("status")            // SUCCESS, FAILED, TIMEOUT
+  errorMessage      String?  @map("error_message")     // Error details if failed
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("configuration_logs")
+}
+

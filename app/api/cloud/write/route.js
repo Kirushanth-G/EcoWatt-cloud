@@ -155,6 +155,54 @@ function decompressData(compressedPayload, header) {
   return readings;
 }
 
+// Check for pending configuration updates
+async function checkForPendingConfiguration() {
+  try {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return null; // No database configured
+    }
+
+    // Look for pending configurations
+    const { data: pendingConfigs, error } = await supabase
+      .from("configuration_logs")
+      .select("*")
+      .eq("status", "PENDING")
+      .order("created_at", { ascending: true })
+      .limit(1);
+
+    if (error) {
+      console.error("Configuration check error:", error);
+      return null;
+    }
+
+    if (!pendingConfigs || pendingConfigs.length === 0) {
+      return null; // No pending configurations
+    }
+
+    const pendingConfig = pendingConfigs[0];
+    
+    // Update status to SENDING
+    await supabase
+      .from("configuration_logs")
+      .update({ 
+        status: "SENDING",
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", pendingConfig.id);
+
+    console.log(`Found pending configuration:`, pendingConfig.config_sent);
+
+    return {
+      config_id: pendingConfig.id,
+      config_update: pendingConfig.config_sent.config_update
+    };
+
+  } catch (error) {
+    console.error("Configuration check error:", error);
+    return null;
+  }
+}
+
 // Store sensor data in database
 async function storeSensorData(sensorValues) {
   try {
@@ -322,11 +370,22 @@ export async function POST(req) {
     console.log(`\n=== Storing ${sensorValues.length} sensor values ===`);
     const storageResult = await storeSensorData(sensorValues);
     
-    // Step 11: Generate success response (always succeed if processing worked)
+    // Step 11: Check for pending configuration updates
+    console.log(`\n=== Checking for configuration updates ===`);
+    const pendingConfig = await checkForPendingConfiguration();
+    
+    // Step 12: Generate response with optional configuration update
     const responseData = {
-      status: "success",
-      storage_info: storageResult.success ? `${storageResult.samples_stored || 0} samples stored in database` : `Processing successful, storage skipped: ${storageResult.error || 'Environment not configured'}`
+      status: "ok"
     };
+
+    // Add configuration update if available
+    if (pendingConfig) {
+      responseData.config_update = pendingConfig.config_update;
+      console.log('📡 Including configuration update in response:', pendingConfig.config_update);
+    } else {
+      console.log('📡 No pending configuration updates');
+    }
 
     console.log('=== Success Response ===');
     console.log('✅ Frame processed successfully');
@@ -334,7 +393,7 @@ export async function POST(req) {
     console.log('📊 Storage result:', storageResult.success ? 'SUCCESS' : 'SKIPPED');
     
     if (storageResult.success) {
-      console.log('💾 Data stored in database with ID:', storageResult.data?.id);
+      console.log('💾 Data stored in database');
     } else {
       console.log('⚠️ Storage issue:', storageResult.error || 'Environment not configured');
     }
