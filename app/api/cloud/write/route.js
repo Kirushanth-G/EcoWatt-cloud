@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { promises as fs } from "fs";
+import { createHash, createSign } from "crypto";
+import path from "path";
+
+// Import encryption/decryption utilities
+const encryptionModule = await import('./encryptionAndSecurity.js');
+const { processEncryptedUpload } = encryptionModule;
 
 // Supabase client
 const supabase = createClient(
@@ -203,6 +210,152 @@ async function checkForPendingConfiguration() {
   }
 }
 
+// Check for pending write commands
+async function checkForPendingWriteCommand() {
+  try {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return null; // No database configured
+    }
+
+    // Look for pending write commands
+    const { data: pendingCommands, error } = await supabase
+      .from("write_commands")
+      .select("*")
+      .eq("status", "PENDING")
+      .order("created_at", { ascending: true })
+      .limit(1);
+
+    if (error) {
+      console.error("Write command check error:", error);
+      return null;
+    }
+
+    if (!pendingCommands || pendingCommands.length === 0) {
+      return null; // No pending commands
+    }
+
+    const pendingCommand = pendingCommands[0];
+    
+    // Update status to SENDING
+    await supabase
+      .from("write_commands")
+      .update({ 
+        status: "SENDING",
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", pendingCommand.id);
+
+    console.log(`Found pending write command:`, pendingCommand);
+
+    return {
+      action: "write_register",
+      target_register: "8",
+      value: pendingCommand.value
+    };
+
+  } catch (error) {
+    console.error("Write command check error:", error);
+    return null;
+  }
+}
+
+// Check for pending FOTA updates
+async function checkForPendingFOTA() {
+  try {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return null; // No database configured
+    }
+
+    // Look for pending FOTA updates
+    const { data: pendingUpdates, error } = await supabase
+      .from("fota_updates")
+      .select("*")
+      .eq("status", "PENDING")
+      .order("created_at", { ascending: true })
+      .limit(1);
+
+    if (error) {
+      console.error("FOTA check error:", error);
+      return null;
+    }
+
+    if (!pendingUpdates || pendingUpdates.length === 0) {
+      return null; // No pending FOTA
+    }
+
+    const pendingUpdate = pendingUpdates[0];
+    
+    // Read firmware from uploads/firmware.bin
+    const filePath = path.join(process.cwd(), "uploads", "firmware.bin");
+
+    // Check if firmware file exists
+    try {
+      const stats = await fs.stat(filePath);
+      const fileSize = stats.size;
+      
+      // Use SHA-256 and size from database record
+      const sha256 = pendingUpdate.firmware_sha256;
+      const recordedSize = pendingUpdate.firmware_size;
+
+      // Get base URL - use Vercel production URL, fallback to localhost for development
+      const baseUrl = process.env.NODE_ENV === 'production' 
+        ? "https://eco-watt-cloud.vercel.app" 
+        : "http://localhost:3000";
+
+      // Create JSON data
+      const fotaData = {
+        job_id: pendingUpdate.id,
+        fwUrl: `${baseUrl}/api/fota/download`,
+        fwSize: recordedSize,
+        shaExpected: sha256
+      };
+
+      // Sign FOTA manifest if private key exists
+      try {
+        const keyPath = path.join(process.cwd(), "private", "ecdsa_private.pem");
+        const privateKey = await fs.readFile(keyPath, "utf-8");
+        const signer = createSign("SHA256");
+        signer.update(JSON.stringify(fotaData));
+        signer.end();
+        const signature = signer.sign(privateKey, "base64");
+        fotaData.signature = signature;
+      } catch (keyError) {
+        console.warn("ECDSA private key not found, FOTA manifest unsigned");
+      }
+
+      // Update status to SENDING
+      await supabase
+        .from("fota_updates")
+        .update({ 
+          status: "SENDING",
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", pendingUpdate.id);
+
+      console.log(`Found pending FOTA update:`, fotaData);
+
+      return fotaData;
+
+    } catch (fileError) {
+      console.error("Firmware file not found:", fileError);
+      // Update FOTA record to FAILED
+      await supabase
+        .from("fota_updates")
+        .update({ 
+          status: "FAILED",
+          error_message: "Firmware file not found",
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", pendingUpdate.id);
+      return null;
+    }
+
+  } catch (error) {
+    console.error("FOTA check error:", error);
+    return null;
+  }
+}
+
 // Store sensor data in database
 async function storeSensorData(sensorValues) {
   try {
@@ -295,14 +448,50 @@ export async function POST(req) {
       );
     }
 
-    // Step 3: Read binary frame
+    // Step 3: Read binary payload
     const arrayBuffer = await req.arrayBuffer();
-    const frame = new Uint8Array(arrayBuffer);
+    const rawPayload = Buffer.from(arrayBuffer);
 
-    console.log(`Received frame: ${frame.length} bytes`);
-    console.log(`Frame hex: ${Array.from(frame).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+    console.log(`Received payload: ${rawPayload.length} bytes`);
 
-    // Step 4: Validate frame size (48 bytes total)
+    // Step 4: Check for encryption headers
+    const encryptionHeader = req.headers.get('encryption');
+    const nonceHeader = req.headers.get('nonce');
+    const macHeader = req.headers.get('mac');
+
+    let frame;
+
+    // If encryption headers are present, decrypt the payload
+    if (encryptionHeader === 'aes-256-cbc' && nonceHeader && macHeader) {
+      console.log('🔐 Encrypted payload detected - processing with AES-256-CBC decryption');
+      console.log(`   Nonce: ${nonceHeader}`);
+      console.log(`   MAC: ${macHeader.substring(0, 16)}...`);
+
+      // Process encrypted upload (decrypt, verify MAC, verify CRC, decompress)
+      const decryptionResult = processEncryptedUpload(rawPayload, nonceHeader, macHeader);
+
+      if (!decryptionResult.success) {
+        console.error(`❌ Decryption failed: ${decryptionResult.error}`);
+        return NextResponse.json(
+          { error: decryptionResult.error },
+          { status: 400 }
+        );
+      }
+
+      console.log('✅ Decryption successful');
+      frame = new Uint8Array(decryptionResult.data);
+      console.log(`Decrypted frame: ${frame.length} bytes`);
+      console.log(`Frame hex: ${Array.from(frame).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+
+    } else {
+      // No encryption - process as plain binary frame
+      console.log('📤 Plain binary payload (no encryption)');
+      frame = new Uint8Array(rawPayload);
+      console.log(`Frame: ${frame.length} bytes`);
+      console.log(`Frame hex: ${Array.from(frame).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+    }
+
+    // Step 5: Validate frame size (48 bytes total)
     if (frame.length !== EXPECTED_FRAME_SIZE) {
       console.error(`Invalid frame size: ${frame.length}, expected: ${EXPECTED_FRAME_SIZE}`);
       return NextResponse.json(
@@ -311,7 +500,7 @@ export async function POST(req) {
       );
     }
 
-    // Step 5: Validate CRC
+    // Step 6: Validate CRC
     if (!validateCRC(frame)) {
       console.error('CRC validation failed');
       return NextResponse.json(
@@ -320,7 +509,7 @@ export async function POST(req) {
       );
     }
 
-    // Step 6: Extract components (remove CRC to get data)
+    // Step 7: Extract components (remove CRC to get data)
     const dataWithoutCRC = frame.slice(0, -EXPECTED_CRC_SIZE); // First 46 bytes
     const metadataFlag = dataWithoutCRC[0]; // First byte
     const headerData = dataWithoutCRC.slice(EXPECTED_METADATA_SIZE, EXPECTED_METADATA_SIZE + EXPECTED_HEADER_SIZE); // Bytes 1-5
@@ -331,7 +520,7 @@ export async function POST(req) {
     console.log(`Header: ${headerData.length} bytes`);
     console.log(`Compressed payload: ${compressedPayload.length} bytes`);
 
-    // Step 7: Validate metadata flag (0x00 = raw compression, 0x01 = aggregated)
+    // Step 8: Validate metadata flag (0x00 = raw compression, 0x01 = aggregated)
     if (metadataFlag !== 0x00) {
       console.error(`Unsupported metadata flag: 0x${metadataFlag.toString(16)}`);
       return NextResponse.json(
@@ -340,7 +529,7 @@ export async function POST(req) {
       );
     }
 
-    // Step 8: Parse and validate header
+    // Step 9: Parse and validate header
     let header;
     try {
       header = parseFrameHeader(headerData);
@@ -352,7 +541,7 @@ export async function POST(req) {
       );
     }
 
-    // Step 9: Decompress data to extract sensor values
+    // Step 10: Decompress data to extract sensor values
     let sensorValues;
     try {
       sensorValues = decompressData(compressedPayload, header);
@@ -366,25 +555,41 @@ export async function POST(req) {
 
     console.log(`Extracted ${sensorValues.length} sensor values:`, sensorValues);
 
-    // Step 10: Store data in database (graceful handling)
+    // Step 11: Store data in database (graceful handling)
     console.log(`\n=== Storing ${sensorValues.length} sensor values ===`);
     const storageResult = await storeSensorData(sensorValues);
     
-    // Step 11: Check for pending configuration updates
-    console.log(`\n=== Checking for configuration updates ===`);
+    // Step 12: Check for pending updates/commands
+    console.log(`\n=== Checking for pending updates and commands ===`);
     const pendingConfig = await checkForPendingConfiguration();
+    const pendingCommand = await checkForPendingWriteCommand();
+    const pendingFOTA = await checkForPendingFOTA();
     
-    // Step 12: Generate response with optional configuration update
+    // Step 13: Generate unified response
     const responseData = {
-      status: "ok"
+      status: "success"
     };
+
+    // Add write command if available
+    if (pendingCommand) {
+      responseData.command = pendingCommand;
+      console.log('📝 Including write command in response:', pendingCommand);
+    }
 
     // Add configuration update if available
     if (pendingConfig) {
       responseData.config_update = pendingConfig.config_update;
-      console.log('📡 Including configuration update in response:', pendingConfig.config_update);
-    } else {
-      console.log('📡 No pending configuration updates');
+      console.log('⚙️ Including configuration update in response:', pendingConfig.config_update);
+    }
+
+    // Add FOTA update if available
+    if (pendingFOTA) {
+      responseData.fota = pendingFOTA;
+      console.log('� Including FOTA update in response:', pendingFOTA);
+    }
+
+    if (!pendingCommand && !pendingConfig && !pendingFOTA) {
+      console.log('✅ No pending updates or commands');
     }
 
     console.log('=== Success Response ===');

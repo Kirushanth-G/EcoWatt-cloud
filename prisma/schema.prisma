@@ -44,3 +44,59 @@ model ConfigurationLog {
   @@map("configuration_logs")
 }
 
+model WriteCommand {
+  id                BigInt   @id @default(autoincrement())
+  value             Int      @map("value")             // Value to write (0-100)
+  status            String   @map("status")            // PENDING, SENDING, SUCCESS, FAILED
+  deviceResponse    Json?    @map("device_response")   // Device acknowledgment response
+  errorMessage      String?  @map("error_message")     // Error details if failed
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("write_commands")
+}
+
+model FotaUpdate {
+  id                BigInt   @id @default(autoincrement())
+  firmwareSha256    String   @map("firmware_sha256")   // SHA-256 hash of firmware
+  firmwareSize      Int      @map("firmware_size")     // Firmware size in bytes
+  status            String   @map("status")            // PENDING, SENDING, COMPLETED, FAILED
+  deviceResponse    Json?    @map("device_response")   // Device update status response
+  errorMessage      String?  @map("error_message")     // Error details if failed
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  fotaLogs          FotaLog[]
+
+  @@map("fota_updates")
+}
+
+model FirmwareStorage {
+  id                Int      @id @default(1)           // Always 1 - single firmware
+  filename          String   @map("filename")          // Original filename
+  size              Int      @map("size")              // File size in bytes
+  sha256            String   @map("sha256")            // SHA-256 hash
+  uploadedAt        DateTime @map("uploaded_at")       // Upload timestamp
+
+  @@map("firmware_storage")
+}
+
+model FotaLog {
+  id                  BigInt   @id @default(autoincrement())
+  fotaUpdateId        BigInt?  @map("fota_update_id")
+  firmwareSha256      String   @map("firmware_sha256")
+  downloadSuccess     Boolean  @map("download_success")
+  verificationSuccess Boolean  @map("verification_success")
+  updateSuccess       Boolean  @map("update_success")
+  overallSuccess      Boolean  @map("overall_success")
+  errorStage          String?  @map("error_stage")       // DOWNLOAD, VERIFICATION, UPDATE
+  errorCode           String?  @map("error_code")        // Error code from device
+  downloadDurationMs  Int?     @map("download_duration_ms")
+  totalDurationMs     Int?     @map("total_duration_ms")
+  rawLog              String   @map("raw_log")           // Raw log text
+  logFilePath         String   @map("log_file_path")     // Path to saved log file
+  createdAt           DateTime @default(now()) @map("created_at")
+  fotaUpdate          FotaUpdate? @relation(fields: [fotaUpdateId], references: [id])
+
+  @@map("fota_logs")
+}
+

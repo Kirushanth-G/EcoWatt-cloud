@@ -21,12 +21,19 @@ function validateConfigPayload(config) {
     return { valid: false, errors };
   }
 
-  const { sampling_interval, registers } = config.config_update;
+  const { sampling_interval, upload_interval, registers } = config.config_update;
 
   // Validate sampling_interval
   if (sampling_interval !== undefined) {
     if (typeof sampling_interval !== 'number' || sampling_interval < 1 || sampling_interval > 3600) {
       errors.push("sampling_interval must be a number between 1 and 3600 seconds");
+    }
+  }
+
+  // Validate upload_interval
+  if (upload_interval !== undefined) {
+    if (typeof upload_interval !== 'number' || upload_interval < 1 || upload_interval > 3600) {
+      errors.push("upload_interval must be a number between 1 and 3600 seconds");
     }
   }
 
@@ -44,8 +51,8 @@ function validateConfigPayload(config) {
   }
 
   // At least one parameter should be provided
-  if (sampling_interval === undefined && registers === undefined) {
-    errors.push("At least one configuration parameter (sampling_interval or registers) must be provided");
+  if (sampling_interval === undefined && upload_interval === undefined && registers === undefined) {
+    errors.push("At least one configuration parameter (sampling_interval, upload_interval, or registers) must be provided");
   }
 
   return { valid: errors.length === 0, errors };

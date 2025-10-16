@@ -5,13 +5,17 @@ import Link from "next/link";
 export default function ConfigPage() {
   const [config, setConfig] = useState({
     sampling_interval: 10,
+    upload_interval: 20,
     registers: []
   });
+  const [writeCommand, setWriteCommand] = useState({ value: 50 });
   const [latestConfig, setLatestConfig] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [sendingCommand, setSendingCommand] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [commandSuccess, setCommandSuccess] = useState(null);
 
   // Available registers with descriptions
   const availableRegisters = [
@@ -43,6 +47,7 @@ export default function ConfigPage() {
           if (latest.config_sent?.config_update) {
             setConfig({
               sampling_interval: latest.config_sent.config_update.sampling_interval || 10,
+              upload_interval: latest.config_sent.config_update.upload_interval || 20,
               registers: latest.config_sent.config_update.registers || []
             });
           }
@@ -71,6 +76,18 @@ export default function ConfigPage() {
       ...prev,
       sampling_interval: parseInt(value) || 1
     }));
+  };
+
+  const handleUploadIntervalChange = (value) => {
+    setConfig(prev => ({
+      ...prev,
+      upload_interval: parseInt(value) || 1
+    }));
+  };
+
+  const handleWriteCommandChange = (value) => {
+    const numValue = parseInt(value) || 0;
+    setWriteCommand({ value: Math.max(0, Math.min(100, numValue)) });
   };
 
   const handleSubmit = async (e) => {
@@ -108,6 +125,35 @@ export default function ConfigPage() {
       setError(`Network error: ${err.message}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSendWriteCommand = async (e) => {
+    e.preventDefault();
+    setSendingCommand(true);
+    setCommandSuccess(null);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/device/write-command', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ value: writeCommand.value })
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        setCommandSuccess("Write command queued successfully!");
+      } else {
+        setError(result.error || "Failed to send write command");
+      }
+    } catch (err) {
+      setError(`Network error: ${err.message}`);
+    } finally {
+      setSendingCommand(false);
     }
   };
 
@@ -226,8 +272,8 @@ export default function ConfigPage() {
       <form onSubmit={handleSubmit} className="space-y-8">
         {/* Sampling Interval */}
         <div className="bg-white shadow-lg rounded-lg p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Sampling Interval</h2>
-          <div className="space-y-4">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Timing Configuration</h2>
+          <div className="space-y-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Sampling Interval (seconds)
@@ -267,6 +313,49 @@ export default function ConfigPage() {
                 className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded"
               >
                 30s (Low frequency)
+              </button>
+            </div>
+
+            {/* Upload Interval */}
+            <div className="pt-4 border-t">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Upload Interval (seconds)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="3600"
+                value={config.upload_interval}
+                onChange={(e) => handleUploadIntervalChange(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Enter upload interval (1-3600)"
+              />
+              <p className="text-sm text-gray-500 mt-1">
+                How often the device should upload collected data to cloud (1-3600 seconds)
+              </p>
+            </div>
+
+            <div className="flex items-center space-x-4 text-sm text-gray-600">
+              <button
+                type="button"
+                onClick={() => handleUploadIntervalChange(10)}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+              >
+                10s (Frequent)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleUploadIntervalChange(20)}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+              >
+                20s (Normal)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleUploadIntervalChange(60)}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+              >
+                60s (Infrequent)
               </button>
             </div>
           </div>
@@ -346,6 +435,91 @@ export default function ConfigPage() {
           </p>
         )}
       </form>
+
+      {/* Write Command Section */}
+      <div className="mt-8 bg-white shadow-lg rounded-lg p-6">
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">Write Command</h2>
+        <p className="text-sm text-gray-600 mb-4">
+          Send a write command to register 8 (value: 0-100)
+        </p>
+
+        {/* Command Success Message */}
+        {commandSuccess && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+            <p className="text-green-800 font-semibold">{commandSuccess}</p>
+          </div>
+        )}
+
+        <form onSubmit={handleSendWriteCommand} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Value (0-100)
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              value={writeCommand.value}
+              onChange={(e) => handleWriteCommandChange(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Enter value (0-100)"
+            />
+            <p className="text-sm text-gray-500 mt-1">
+              Write a value between 0 and 100 to register 8
+            </p>
+          </div>
+
+          <div className="flex items-center space-x-4 text-sm text-gray-600">
+            <button
+              type="button"
+              onClick={() => handleWriteCommandChange(0)}
+              className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+            >
+              0 (Min)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleWriteCommandChange(50)}
+              className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+            >
+              50 (Mid)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleWriteCommandChange(100)}
+              className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+            >
+              100 (Max)
+            </button>
+          </div>
+
+          <div className="flex justify-center pt-2">
+            <button
+              type="submit"
+              disabled={sendingCommand}
+              className={`px-6 py-2 rounded-lg font-medium transition-colors ${
+                sendingCommand
+                  ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
+                  : 'bg-purple-600 hover:bg-purple-700 text-white'
+              }`}
+            >
+              {sendingCommand ? 'Sending Command...' : 'Send Write Command'}
+            </button>
+          </div>
+
+          {/* Command Preview */}
+          <div className="mt-4 bg-gray-50 border border-gray-200 rounded p-3">
+            <p className="text-xs font-medium text-gray-700 mb-1">Command Preview:</p>
+            <pre className="text-xs text-gray-600">
+{JSON.stringify({
+  action: "write_register",
+  target_register: "8",
+  value: writeCommand.value
+}, null, 2)}
+            </pre>
+          </div>
+        </form>
+      </div>
 
       {/* Configuration Preview */}
       <div className="mt-8 bg-gray-50 border border-gray-200 rounded-lg p-6">

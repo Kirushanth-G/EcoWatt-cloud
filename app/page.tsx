@@ -26,6 +26,12 @@ export default function Home() {
           >
             Change Configurations
           </Link>
+          <Link
+            className="rounded-lg border border-solid border-transparent transition-colors flex items-center justify-center bg-green-600 text-white hover:bg-green-700 font-medium text-lg h-14 px-8"
+            href="/fota"
+          >
+            FOTA Update
+          </Link>
         </div>
       </main>
     </div>
