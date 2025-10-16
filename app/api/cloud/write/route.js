@@ -16,7 +16,7 @@ const supabase = createClient(
 
 // Configuration constants
 const EXPECTED_API_KEY = "ColdPlay2025";
-const EXPECTED_FRAME_SIZE = 48; // 1 byte metadata + 5 bytes header + 40 bytes data + 2 bytes CRC
+// Frame size is now dynamic based on device configuration via header information
 const EXPECTED_METADATA_SIZE = 1;
 const EXPECTED_HEADER_SIZE = 5;
 const EXPECTED_DATA_SIZE = 40;
@@ -80,13 +80,18 @@ function parseFrameHeader(headerData) {
   
   console.log('Header parsed:', header);
   
-  // Validate header values
-  if (header.count !== 5) {
-    throw new Error(`Invalid number of samples: ${header.count}`);
+  // Validate header values dynamically (supports remote config changes)
+  if (header.count < 1 || header.count > 1000) {
+    throw new Error(`Invalid number of samples: ${header.count} (must be 1-1000)`);
   }
   
-  if (header.regCount !== 10) {
-    throw new Error(`Invalid register count: ${header.regCount}`);
+  if (header.regCount < 1 || header.regCount > 50) {
+    throw new Error(`Invalid register count: ${header.regCount} (must be 1-50)`);
+  }
+
+  // Validate compressed size is reasonable
+  if (header.compressedSize < 1 || header.compressedSize > 10000) {
+    throw new Error(`Invalid compressed size: ${header.compressedSize} (must be 1-10000 bytes)`);
   }
   
   if (header.compressedSize !== EXPECTED_DATA_SIZE) {
@@ -491,14 +496,14 @@ export async function POST(req) {
       console.log(`Frame hex: ${Array.from(frame).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
     }
 
-    // Step 5: Validate frame size (minimum size check for metadata + CRC)
-    const MIN_FRAME_SIZE = 3; // 1 byte metadata + 2 bytes CRC minimum
-    const MAX_FRAME_SIZE = 200; // Reasonable upper limit for compressed data
+    // Step 5: Validate frame size (adaptive to handle remote config changes)
+    const MIN_FRAME_SIZE = 8; // 1 byte metadata + 5 bytes header + 0 bytes data + 2 bytes CRC minimum
+    const MAX_FRAME_SIZE = 2000; // Support larger frames for longer polling intervals (up to ~1000 samples)
     
     if (frame.length < MIN_FRAME_SIZE || frame.length > MAX_FRAME_SIZE) {
       console.error(`Invalid frame size: ${frame.length}, expected between ${MIN_FRAME_SIZE} and ${MAX_FRAME_SIZE} bytes`);
       return NextResponse.json(
-        { error: "Invalid frame size" },
+        { error: `Invalid frame size: ${frame.length} bytes (range: ${MIN_FRAME_SIZE}-${MAX_FRAME_SIZE})` },
         { status: 400 }
       );
     }
@@ -557,6 +562,18 @@ export async function POST(req) {
         { status: 400 }
       );
     }
+
+    // Step 10b: Cross-validate header with actual payload size
+    if (compressedPayload.length !== header.compressedSize) {
+      console.error(`Payload size mismatch: header says ${header.compressedSize} bytes, actual payload is ${compressedPayload.length} bytes`);
+      return NextResponse.json(
+        { error: `Payload size mismatch: expected ${header.compressedSize} bytes, got ${compressedPayload.length} bytes` },
+        { status: 400 }
+      );
+    }
+
+    console.log(`✅ Frame validation passed: ${header.count} samples, ${header.regCount} registers, ${header.compressedSize} bytes compressed data`);
+    console.log(`📊 Dynamic configuration detected: samples/upload=${header.count}, registers=${header.regCount}`);
 
     // Step 11: Decompress data to extract sensor values
     let sensorValues;
