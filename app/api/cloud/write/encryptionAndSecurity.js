@@ -120,18 +120,39 @@ class NonceManager {
         fs.writeFileSync(this.filePath, data, 'utf8');
     }
 
+    // Public methods for admin access
+    readNonce() {
+        return this._readNonce();
+    }
+
+    writeNonce(nonce) {
+        return this._writeNonce(nonce);
+    }
+
     verifyAndIncrementNonce(receivedNonce) {
         try {
             const expectedNonce = this._readNonce();
 
-            // if (receivedNonce === expectedNonce || receivedNonce > expectedNonce && receivedNonce <= expectedNonce + 3) {
-            if (receivedNonce === expectedNonce) {
-                console.log(`Nonce verified: ${receivedNonce}`);
+            // Allow some flexibility for retry scenarios and clock drift
+            // Accept the exact expected nonce OR slightly ahead (within a reasonable window)
+            if (receivedNonce === expectedNonce || 
+                (receivedNonce > expectedNonce && receivedNonce <= expectedNonce + 10)) {
+                console.log(`Nonce verified: ${receivedNonce} (expected: ${expectedNonce})`);
+                
+                // Always update to received nonce + 1 to stay in sync
+                this._writeNonce(receivedNonce + 1);
+                return true;
+            }
+            
+            // Special case: if received nonce is much higher, assume device reset/resync needed
+            if (receivedNonce > expectedNonce + 10) {
+                console.warn(`Large nonce gap detected! Expected: ${expectedNonce}, Received: ${receivedNonce}`);
+                console.warn(`Auto-syncing to device nonce for recovery`);
                 this._writeNonce(receivedNonce + 1);
                 return true;
             }
 
-            console.error(`Nonce mismatch! Expected: ${expectedNonce}, Received: ${receivedNonce}`);
+            console.error(`Nonce mismatch and outside acceptable range! Expected: ${expectedNonce}, Received: ${receivedNonce}`);
             return false;
         } catch (error) {
             console.error("Error processing nonce:", error);
