@@ -510,7 +510,7 @@ export async function POST(req) {
     
     console.log(`Frame size: ${frame.length} bytes (valid range: ${MIN_FRAME_SIZE}-${MAX_FRAME_SIZE})`);
 
-    // Step 6: Validate CRC
+    // Step 6: Validate CRC (device now properly appends CRC)
     if (!validateCRC(frame)) {
       console.error('CRC validation failed');
       return NextResponse.json(
@@ -521,9 +521,10 @@ export async function POST(req) {
 
     // Step 7: Extract components (remove CRC to get data)
     const dataWithoutCRC = frame.slice(0, -EXPECTED_CRC_SIZE);
+    
     const metadataFlag = dataWithoutCRC[0]; // First byte
 
-    console.log(`Data without CRC: ${dataWithoutCRC.length} bytes`);
+    console.log(`Data length: ${dataWithoutCRC.length} bytes`);
     console.log(`Metadata flag: 0x${metadataFlag.toString(16).padStart(2, '0')}`);
 
     // Step 8: Validate metadata flag (0x00 = raw compression, 0x01 = aggregated)
