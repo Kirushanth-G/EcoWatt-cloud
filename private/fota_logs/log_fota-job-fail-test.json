@@ -1,0 +1,21 @@
+{
+    "jobId": "fota-job-fail-test",
+    "final_status": "FAILURE",
+    "duration_ms": 1023,
+    "events": [
+      {
+        "ts": "2025-10-16T21:49:16+05:30",
+        "lvl": "INFO",
+        "msg": "FOTA_START",
+        "job": "fota-job-fail-test",
+        "from": "1.0.0",
+        "to": "unknown"
+      },
+      {
+        "ts": "2025-10-16T21:49:17+05:30",
+        "lvl": "ERROR",
+        "msg": "FOTA_FAIL",
+        "reason": "HTTP_ERROR_-1"
+      }
+    ]
+  }

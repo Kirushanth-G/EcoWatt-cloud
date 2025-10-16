@@ -204,60 +204,14 @@ function processEncryptedUpload(rawPayload, receivedNonce, receivedMAC) {
         
         console.log('[UPLOAD] ✅ Decryption successful');
 
-        // Step 5: Verify CRC (last 2 bytes of decrypted payload)
-        if (decryptedPayload.length < 2) {
-            return {
-                success: false,
-                data: null,
-                error: 'Decrypted payload too short for CRC'
-            };
-        }
-
-        const dataWithoutCRC = decryptedPayload.slice(0, -2);
-        const receivedCRC = decryptedPayload.readUInt16LE(decryptedPayload.length - 2);
-        
-        // Calculate CRC-16 MODBUS on data
-        const expectedCRC = calculateCRC16(dataWithoutCRC);
-        
-        if (receivedCRC !== expectedCRC) {
-            console.error('[UPLOAD] CRC verification failed!');
-            console.error(`[UPLOAD] Expected: 0x${expectedCRC.toString(16).padStart(4, '0')}`);
-            console.error(`[UPLOAD] Received: 0x${receivedCRC.toString(16).padStart(4, '0')}`);
-            return {
-                success: false,
-                data: null,
-                error: 'CRC verification failed'
-            };
-        }
-        
-        console.log('[UPLOAD] ✅ CRC verified successfully');
-
-        // Step 6: Extract compression flag and decompress if needed
-        const compressionFlag = dataWithoutCRC[0];
-        let finalData;
-
-        if (compressionFlag === 0x01) {
-            console.log('[UPLOAD] Data is compressed, decompressing...');
-            const compressedData = dataWithoutCRC.slice(1);
-            finalData = decompressData(compressedData);
-            console.log(`[UPLOAD] Decompressed: ${compressedData.length} → ${finalData.length} bytes`);
-        } else if (compressionFlag === 0x00) {
-            console.log('[UPLOAD] Data is not compressed');
-            finalData = dataWithoutCRC.slice(1);
-        } else {
-            return {
-                success: false,
-                data: null,
-                error: `Invalid compression flag: 0x${compressionFlag.toString(16)}`
-            };
-        }
-
+        // Step 5: Return the full 48-byte decrypted frame
+        // Let route.js handle CRC validation and decompression
         console.log('[UPLOAD] ✅ Upload processing complete');
-        console.log(`[UPLOAD] Final data size: ${finalData.length} bytes\n`);
+        console.log(`[UPLOAD] Decrypted frame size: ${decryptedPayload.length} bytes\n`);
 
         return {
             success: true,
-            data: finalData,
+            data: decryptedPayload,
             error: null
         };
 

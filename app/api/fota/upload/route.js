@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
+import { createClient } from "@supabase/supabase-js";
 import { writeFile, mkdir } from 'fs/promises';
 import { createHash } from 'crypto';
 import path from 'path';
 
 const prisma = new PrismaClient();
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 export async function POST(request) {
   try {
@@ -45,32 +50,69 @@ export async function POST(request) {
     const firmwarePath = path.join(uploadsDir, 'firmware.bin');
     await writeFile(firmwarePath, buffer);
 
-    // Update or create firmware_storage record
-    await prisma.firmwareStorage.upsert({
-      where: { id: 1 },
-      update: {
-        filename: file.name,
-        size: buffer.length,
-        sha256: sha256,
-        uploaded_at: new Date(),
-      },
-      create: {
-        id: 1,
-        filename: file.name,
-        size: buffer.length,
-        sha256: sha256,
-        uploaded_at: new Date(),
-      },
-    });
+    // Try Prisma first, fallback to Supabase
+    try {
+      // Update or create firmware_storage record
+      await prisma.firmwareStorage.upsert({
+        where: { id: 1 },
+        update: {
+          filename: file.name,
+          size: buffer.length,
+          sha256: sha256,
+          uploadedAt: new Date(),
+        },
+        create: {
+          id: 1,
+          filename: file.name,
+          size: buffer.length,
+          sha256: sha256,
+          uploadedAt: new Date(),
+        },
+      });
 
-    // Create FOTA update record with PENDING status
-    await prisma.fotaUpdate.create({
-      data: {
-        firmware_sha256: sha256,
-        firmware_size: buffer.length,
-        status: 'PENDING',
-      },
-    });
+      // Create FOTA update record with PENDING status
+      await prisma.fotaUpdate.create({
+        data: {
+          firmwareSha256: sha256,
+          firmwareSize: buffer.length,
+          status: 'PENDING',
+        },
+      });
+    } catch (prismaError) {
+      console.error('Prisma failed, using Supabase:', prismaError);
+      
+      // Fallback to Supabase
+      // Update or create firmware_storage record
+      const { error: storageError } = await supabase
+        .from("firmware_storage")
+        .upsert({
+          id: 1,
+          filename: file.name,
+          size: buffer.length,
+          sha256: sha256,
+          uploaded_at: new Date().toISOString(),
+        });
+
+      if (storageError) {
+        console.error('Supabase firmware_storage error:', storageError);
+      }
+
+      // Create FOTA update record with PENDING status
+      const { error: fotaError } = await supabase
+        .from("fota_updates")
+        .insert({
+          firmware_sha256: sha256,
+          firmware_size: buffer.length,
+          status: 'PENDING',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+
+      if (fotaError) {
+        console.error('Supabase fota_updates error:', fotaError);
+        throw fotaError;
+      }
+    }
 
     return NextResponse.json({
       success: true,

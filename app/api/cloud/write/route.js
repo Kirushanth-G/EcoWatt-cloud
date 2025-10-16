@@ -89,14 +89,13 @@ function parseFrameHeader(headerData) {
     throw new Error(`Invalid register count: ${header.regCount} (must be 1-50)`);
   }
 
-  // Validate compressed size is reasonable
+  // Validate compressed size is reasonable (allow variable sizes)
   if (header.compressedSize < 1 || header.compressedSize > 10000) {
     throw new Error(`Invalid compressed size: ${header.compressedSize} (must be 1-10000 bytes)`);
   }
   
-  if (header.compressedSize !== EXPECTED_DATA_SIZE) {
-    throw new Error(`Invalid compressed size: ${header.compressedSize}, expected: ${EXPECTED_DATA_SIZE}`);
-  }
+  // Note: Removed hardcoded EXPECTED_DATA_SIZE check to support variable frame sizes
+  // The actual compressed size depends on data content and compression efficiency
   
   return header;
 }
@@ -265,7 +264,7 @@ async function checkForPendingWriteCommand() {
 }
 
 // Check for pending FOTA updates
-async function checkForPendingFOTA() {
+async function checkForPendingFOTA(req) {
   try {
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
       return null; // No database configured
@@ -302,10 +301,22 @@ async function checkForPendingFOTA() {
       const sha256 = pendingUpdate.firmware_sha256;
       const recordedSize = pendingUpdate.firmware_size;
 
-      // Get base URL - use Vercel production URL, fallback to localhost for development
-      const baseUrl = process.env.NODE_ENV === 'production' 
-        ? "https://eco-watt-cloud.vercel.app" 
-        : "http://localhost:3000";
+      // Get base URL - use dynamic host detection for proper ESP32 connectivity
+      let baseUrl;
+      if (process.env.NODE_ENV === 'production') {
+        baseUrl = "https://eco-watt-cloud.vercel.app";
+      } else {
+        // In development, use the actual host from the request header
+        const host = req.headers.get('host');
+        if (host) {
+          baseUrl = `http://${host}`;
+        } else {
+          // Fallback to network IP for ESP32 connectivity
+          baseUrl = "http://192.168.8.159:3000";
+        }
+      }
+
+      console.log(`FOTA Base URL: ${baseUrl}`);
 
       // Create JSON data
       const fotaData = {
@@ -429,6 +440,67 @@ async function storeSensorData(sensorValues) {
   }
 }
 
+// Handle configuration acknowledgment from ESP32
+async function handleConfigurationAcknowledgment(configAckHeader) {
+  try {
+    // Parse the config acknowledgment from header (JSON string)
+    const configAck = JSON.parse(configAckHeader);
+    console.log('📥 Configuration acknowledgment received:', configAck);
+
+    // Validate acknowledgment structure
+    if (!configAck.accepted || !configAck.rejected || !configAck.unchanged) {
+      console.error('❌ Invalid config acknowledgment format');
+      return;
+    }
+
+    // Update the most recent pending configuration log
+    const { data: recentConfig, error: fetchError } = await supabase
+      .from('configuration_logs')
+      .select('*')
+      .eq('status', 'PENDING')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (fetchError || !recentConfig) {
+      console.error('❌ No pending configuration found to acknowledge:', fetchError?.message);
+      return;
+    }
+
+    // Determine overall status
+    let newStatus = 'APPLIED';
+    if (configAck.rejected.length > 0) {
+      newStatus = 'PARTIALLY_APPLIED';
+    }
+    if (configAck.accepted.length === 0 && configAck.unchanged.length === 0) {
+      newStatus = 'REJECTED';
+    }
+
+    // Update configuration log with acknowledgment
+    const { error: updateError } = await supabase
+      .from('configuration_logs')
+      .update({
+        device_response: configAck,
+        status: newStatus,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', recentConfig.id);
+
+    if (updateError) {
+      console.error('❌ Failed to update configuration log:', updateError);
+      return;
+    }
+
+    console.log(`✅ Configuration acknowledged: ${newStatus}`);
+    console.log(`   Accepted: ${configAck.accepted.length} items`);
+    console.log(`   Rejected: ${configAck.rejected.length} items`);
+    console.log(`   Unchanged: ${configAck.unchanged.length} items`);
+
+  } catch (error) {
+    console.error('❌ Error processing config acknowledgment:', error.message);
+  }
+}
+
 export async function POST(req) {
   try {
     console.log('=== Cloud API Write Request ===');
@@ -459,10 +531,11 @@ export async function POST(req) {
 
     console.log(`Received payload: ${rawPayload.length} bytes`);
 
-    // Step 4: Check for encryption headers
+    // Step 4: Check for encryption and config acknowledgment headers
     const encryptionHeader = req.headers.get('encryption');
     const nonceHeader = req.headers.get('nonce');
     const macHeader = req.headers.get('mac');
+    const configAckHeader = req.headers.get('config-ack');
 
     let frame;
 
@@ -496,109 +569,208 @@ export async function POST(req) {
       console.log(`Frame hex: ${Array.from(frame).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
     }
 
-    // Step 5: Validate frame size (adaptive to handle remote config changes)
-    const MIN_FRAME_SIZE = 8; // 1 byte metadata + 5 bytes header + 0 bytes data + 2 bytes CRC minimum
-    const MAX_FRAME_SIZE = 2000; // Support larger frames for longer polling intervals (up to ~1000 samples)
-    
-    if (frame.length < MIN_FRAME_SIZE || frame.length > MAX_FRAME_SIZE) {
-      console.error(`Invalid frame size: ${frame.length}, expected between ${MIN_FRAME_SIZE} and ${MAX_FRAME_SIZE} bytes`);
-      return NextResponse.json(
-        { error: `Invalid frame size: ${frame.length} bytes (range: ${MIN_FRAME_SIZE}-${MAX_FRAME_SIZE})` },
-        { status: 400 }
-      );
-    }
-    
-    console.log(`Frame size: ${frame.length} bytes (valid range: ${MIN_FRAME_SIZE}-${MAX_FRAME_SIZE})`);
-
-    // Step 6: Validate CRC (device now properly appends CRC)
-    if (!validateCRC(frame)) {
-      console.error('CRC validation failed');
-      return NextResponse.json(
-        { error: "CRC validation failed" },
-        { status: 400 }
-      );
-    }
-
-    // Step 7: Extract components (remove CRC to get data)
-    const dataWithoutCRC = frame.slice(0, -EXPECTED_CRC_SIZE);
-    
-    const metadataFlag = dataWithoutCRC[0]; // First byte
-
-    console.log(`Data length: ${dataWithoutCRC.length} bytes`);
-    console.log(`Metadata flag: 0x${metadataFlag.toString(16).padStart(2, '0')}`);
-
-    // Step 8: Validate metadata flag (0x00 = raw compression, 0x01 = aggregated)
-    if (metadataFlag !== 0x00) {
-      console.error(`Unsupported metadata flag: 0x${metadataFlag.toString(16)}`);
-      return NextResponse.json(
-        { error: "Only raw compression data supported" },
-        { status: 400 }
-      );
-    }
-
-    // Step 9: Extract header and compressed payload
-    if (dataWithoutCRC.length < 7) { // metadata(1) + header(5) + minimum data(1)
-      return NextResponse.json(
-        { error: "Frame too short to contain header" },
-        { status: 400 }
-      );
-    }
-
-    // Extract header (5 bytes after metadata)
-    const headerData = dataWithoutCRC.slice(1, 6);
-    console.log(`Header data: ${headerData.toString('hex')}`);
-
-    // Extract compressed payload (everything after metadata and header)
-    const compressedPayload = dataWithoutCRC.slice(6);
-    console.log(`Compressed payload: ${compressedPayload.length} bytes`);
-
-    // Step 10: Parse and validate header
-    let header;
-    try {
-      header = parseFrameHeader(headerData);
-    } catch (error) {
-      console.error('Header parsing failed:', error.message);
-      return NextResponse.json(
-        { error: `Header parsing failed: ${error.message}` },
-        { status: 400 }
-      );
-    }
-
-    // Step 10b: Cross-validate header with actual payload size
-    if (compressedPayload.length !== header.compressedSize) {
-      console.error(`Payload size mismatch: header says ${header.compressedSize} bytes, actual payload is ${compressedPayload.length} bytes`);
-      return NextResponse.json(
-        { error: `Payload size mismatch: expected ${header.compressedSize} bytes, got ${compressedPayload.length} bytes` },
-        { status: 400 }
-      );
-    }
-
-    console.log(`✅ Frame validation passed: ${header.count} samples, ${header.regCount} registers, ${header.compressedSize} bytes compressed data`);
-    console.log(`📊 Dynamic configuration detected: samples/upload=${header.count}, registers=${header.regCount}`);
-
-    // Step 11: Decompress data to extract sensor values
+    // Step 5: Handle encrypted vs plain frames differently
     let sensorValues;
-    try {
-      sensorValues = decompressData(compressedPayload, header);
-    } catch (error) {
-      console.error('Decompression failed:', error.message);
-      return NextResponse.json(
-        { error: `Decompression failed: ${error.message}` },
-        { status: 400 }
-      );
+    let isEncryptedFrame = (encryptionHeader === 'aes-256-cbc' && nonceHeader && macHeader);
+
+    if (isEncryptedFrame) {
+      console.log('🔐 Processing encrypted frame format');
+      
+      // Encrypted frames are variable size - accommodate large uploads
+      const MIN_ENCRYPTED_FRAME_SIZE = 10; // Minimum: flag + header + some data + CRC
+      const MAX_ENCRYPTED_FRAME_SIZE = 5000; // Large enough for many samples and low compression
+      
+      if (frame.length < MIN_ENCRYPTED_FRAME_SIZE || frame.length > MAX_ENCRYPTED_FRAME_SIZE) {
+        console.error(`Invalid encrypted frame size: ${frame.length}, expected range: ${MIN_ENCRYPTED_FRAME_SIZE}-${MAX_ENCRYPTED_FRAME_SIZE} bytes`);
+        return NextResponse.json(
+          { error: `Invalid encrypted frame size: ${frame.length} bytes (range: ${MIN_ENCRYPTED_FRAME_SIZE}-${MAX_ENCRYPTED_FRAME_SIZE})` },
+          { status: 400 }
+        );
+      }
+      
+      console.log(`✅ Encrypted frame size: ${frame.length} bytes (valid range)`);
+
+      // Validate CRC on the full 48-byte encrypted frame
+      if (!validateCRC(frame)) {
+        console.error('CRC validation failed on encrypted frame');
+        return NextResponse.json(
+          { error: "CRC validation failed" },
+          { status: 400 }
+        );
+      }
+
+      // Extract components from encrypted frame format
+      const dataWithoutCRC = frame.slice(0, -2); // Remove last 2 bytes (CRC)
+      const compressionFlag = dataWithoutCRC[0]; // First byte is compression flag
+      
+      console.log(`Compression flag: 0x${compressionFlag.toString(16).padStart(2, '0')}`);
+      console.log(`Data without CRC: ${dataWithoutCRC.length} bytes`);
+
+      // Validate compression flag
+      if (compressionFlag !== 0x00 && compressionFlag !== 0x01) {
+        console.error(`Invalid compression flag: 0x${compressionFlag.toString(16)}`);
+        return NextResponse.json(
+          { error: `Invalid compression flag: 0x${compressionFlag.toString(16)}` },
+          { status: 400 }
+        );
+      }
+
+      // Parse the header from encrypted frame (bytes 1-5 after compression flag)
+      if (dataWithoutCRC.length < 6) { // flag(1) + header(5) minimum
+        console.error(`Encrypted frame too short for header: ${dataWithoutCRC.length} bytes`);
+        return NextResponse.json(
+          { error: `Encrypted frame too short: ${dataWithoutCRC.length} bytes` },
+          { status: 400 }
+        );
+      }
+
+      const headerData = dataWithoutCRC.slice(1, 6); // Bytes 1-5: header
+      const compressedData = dataWithoutCRC.slice(6); // Bytes 6+: compressed payload
+
+      console.log(`Header data: ${headerData.toString('hex')}`);
+      console.log(`Compressed data: ${compressedData.length} bytes`);
+
+      // Parse header to get actual sample count and structure
+      let header;
+      try {
+        header = parseFrameHeader(headerData);
+        console.log(`Parsed header - Samples: ${header.count}, Registers: ${header.regCount}, Expected compressed: ${header.compressedSize} bytes`);
+      } catch (error) {
+        console.error('Encrypted frame header parsing failed:', error.message);
+        return NextResponse.json(
+          { error: `Header parsing failed: ${error.message}` },
+          { status: 400 }
+        );
+      }
+
+      // Validate header against actual compressed data size
+      if (compressedData.length !== header.compressedSize) {
+        console.error(`Compressed data size mismatch: header says ${header.compressedSize}, actual ${compressedData.length}`);
+        return NextResponse.json(
+          { error: `Data size mismatch: expected ${header.compressedSize}, got ${compressedData.length}` },
+          { status: 400 }
+        );
+      }
+
+      // Decompress the data using real header
+      try {
+        sensorValues = decompressData(compressedData, header);
+        console.log(`✅ Encrypted frame decompressed: ${sensorValues.length} readings`);
+        console.log(`   Samples: ${header.count}, Registers: ${header.regCount}`);
+      } catch (error) {
+        console.error('Encrypted frame decompression failed:', error.message);
+        return NextResponse.json(
+          { error: `Decompression failed: ${error.message}` },
+          { status: 400 }
+        );
+      }
+
+    } else {
+      console.log('📤 Processing plain frame format');
+      
+      // Plain frame validation (existing logic)
+      const MIN_FRAME_SIZE = 8;
+      const MAX_FRAME_SIZE = 2000;
+      
+      if (frame.length < MIN_FRAME_SIZE || frame.length > MAX_FRAME_SIZE) {
+        console.error(`Invalid frame size: ${frame.length}, expected between ${MIN_FRAME_SIZE} and ${MAX_FRAME_SIZE} bytes`);
+        return NextResponse.json(
+          { error: `Invalid frame size: ${frame.length} bytes (range: ${MIN_FRAME_SIZE}-${MAX_FRAME_SIZE})` },
+          { status: 400 }
+        );
+      }
+
+      // Validate CRC on plain frame
+      if (!validateCRC(frame)) {
+        console.error('CRC validation failed on plain frame');
+        return NextResponse.json(
+          { error: "CRC validation failed" },
+          { status: 400 }
+        );
+      }
+
+      // Plain frame processing (existing logic)
+      const dataWithoutCRC = frame.slice(0, -EXPECTED_CRC_SIZE);
+      const metadataFlag = dataWithoutCRC[0];
+
+      console.log(`Data length: ${dataWithoutCRC.length} bytes`);
+      console.log(`Metadata flag: 0x${metadataFlag.toString(16).padStart(2, '0')}`);
+
+      // Validate metadata flag (0x00 = raw compression, 0x01 = aggregated)
+      if (metadataFlag !== 0x00) {
+        console.error(`Unsupported metadata flag: 0x${metadataFlag.toString(16)}`);
+        return NextResponse.json(
+          { error: "Only raw compression data supported" },
+          { status: 400 }
+        );
+      }
+
+      // Extract header and compressed payload
+      if (dataWithoutCRC.length < 7) {
+        return NextResponse.json(
+          { error: "Frame too short to contain header" },
+          { status: 400 }
+        );
+      }
+
+      const headerData = dataWithoutCRC.slice(1, 6);
+      const compressedPayload = dataWithoutCRC.slice(6);
+      console.log(`Header data: ${headerData.toString('hex')}`);
+      console.log(`Compressed payload: ${compressedPayload.length} bytes`);
+
+      // Parse and validate header
+      let header;
+      try {
+        header = parseFrameHeader(headerData);
+      } catch (error) {
+        console.error('Header parsing failed:', error.message);
+        return NextResponse.json(
+          { error: `Header parsing failed: ${error.message}` },
+          { status: 400 }
+        );
+      }
+
+      // Cross-validate header with actual payload size
+      if (compressedPayload.length !== header.compressedSize) {
+        console.error(`Payload size mismatch: header says ${header.compressedSize} bytes, actual payload is ${compressedPayload.length} bytes`);
+        return NextResponse.json(
+          { error: `Payload size mismatch: expected ${header.compressedSize} bytes, got ${compressedPayload.length} bytes` },
+          { status: 400 }
+        );
+      }
+
+      console.log(`✅ Frame validation passed: ${header.count} samples, ${header.regCount} registers, ${header.compressedSize} bytes compressed data`);
+
+      // Decompress plain frame data
+      try {
+        sensorValues = decompressData(compressedPayload, header);
+        console.log(`✅ Plain frame decompressed: ${sensorValues.length} readings`);
+      } catch (error) {
+        console.error('Plain frame decompression failed:', error.message);
+        return NextResponse.json(
+          { error: `Decompression failed: ${error.message}` },
+          { status: 400 }
+        );
+      }
     }
 
     console.log(`Extracted ${sensorValues.length} sensor values:`, sensorValues);
 
-    // Step 12: Store data in database (graceful handling)
+    // Step 12: Handle configuration acknowledgment if present
+    if (configAckHeader) {
+      console.log('\n=== Processing Configuration Acknowledgment ===');
+      await handleConfigurationAcknowledgment(configAckHeader);
+    }
+
+    // Step 13: Store data in database (graceful handling)
     console.log(`\n=== Storing ${sensorValues.length} sensor values ===`);
     const storageResult = await storeSensorData(sensorValues);
     
-    // Step 13: Check for pending updates/commands
+    // Step 14: Check for pending updates/commands
     console.log(`\n=== Checking for pending updates and commands ===`);
     const pendingConfig = await checkForPendingConfiguration();
     const pendingCommand = await checkForPendingWriteCommand();
-    const pendingFOTA = await checkForPendingFOTA();
+    const pendingFOTA = await checkForPendingFOTA(req);
     
     // Step 14: Generate unified response
     const responseData = {
@@ -615,6 +787,20 @@ export async function POST(req) {
     if (pendingConfig) {
       responseData.config_update = pendingConfig.config_update;
       console.log('⚙️ Including configuration update in response:', pendingConfig.config_update);
+      
+      // Update status to SENT (waiting for acknowledgment)
+      try {
+        await supabase
+          .from('configuration_logs')
+          .update({ 
+            status: 'SENT',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', pendingConfig.config_id);
+        console.log('✅ Configuration status updated to SENT');
+      } catch (error) {
+        console.error('❌ Failed to update config status to SENT:', error);
+      }
     }
 
     // Add FOTA update if available

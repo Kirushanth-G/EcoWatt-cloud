@@ -284,7 +284,7 @@ export default function ConfigPage() {
                 max="3600"
                 value={config.sampling_interval}
                 onChange={(e) => handleSamplingIntervalChange(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-500"
                 placeholder="Enter sampling interval (1-3600)"
               />
               <p className="text-sm text-gray-500 mt-1">
@@ -327,7 +327,7 @@ export default function ConfigPage() {
                 max="3600"
                 value={config.upload_interval}
                 onChange={(e) => handleUploadIntervalChange(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-500"
                 placeholder="Enter upload interval (1-3600)"
               />
               <p className="text-sm text-gray-500 mt-1">
@@ -461,7 +461,7 @@ export default function ConfigPage() {
               max="100"
               value={writeCommand.value}
               onChange={(e) => handleWriteCommandChange(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-500"
               placeholder="Enter value (0-100)"
             />
             <p className="text-sm text-gray-500 mt-1">

@@ -1,0 +1,20 @@
+{
+    "jobId": "fota-job-test",
+    "final_status": "SUCCESS",
+    "duration_ms": 23299,
+    "events": [
+      {
+        "ts": "2025-10-16T21:54:55+05:30",
+        "lvl": "INFO",
+        "msg": "FOTA_START",
+        "job": "fota-job-test",
+        "from": "1.0.0",
+        "to": "2.0.0"
+      },
+      {
+        "ts": "2025-10-16T21:55:18+05:30",
+        "lvl": "INFO",
+        "msg": "FOTA_SUCCESS"
+      }
+    ]
+  }

@@ -104,19 +104,19 @@ export default function FotaPage() {
         {/* Current Firmware Info */}
         {currentFirmware && (
           <div className="bg-white rounded-lg shadow p-6 mb-6">
-            <h2 className="text-xl font-semibold mb-4">Current Firmware</h2>
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">Current Firmware</h2>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="text-gray-600">Size:</span>
-                <span className="ml-2 font-mono">{(currentFirmware.size / 1024).toFixed(2)} KB</span>
+                <span className="text-gray-700 font-medium">Size:</span>
+                <span className="ml-2 font-mono text-gray-900">{(currentFirmware.size / 1024).toFixed(2)} KB</span>
               </div>
               <div>
-                <span className="text-gray-600">Uploaded:</span>
-                <span className="ml-2">{new Date(currentFirmware.uploaded_at).toLocaleString()}</span>
+                <span className="text-gray-700 font-medium">Uploaded:</span>
+                <span className="ml-2 text-gray-900">{new Date(currentFirmware.uploaded_at).toLocaleString()}</span>
               </div>
               <div className="col-span-2">
-                <span className="text-gray-600">SHA-256:</span>
-                <span className="ml-2 font-mono text-xs break-all">{currentFirmware.sha256}</span>
+                <span className="text-gray-700 font-medium">SHA-256:</span>
+                <span className="ml-2 font-mono text-xs text-gray-900 break-all">{currentFirmware.sha256}</span>
               </div>
             </div>
           </div>
@@ -124,11 +124,11 @@ export default function FotaPage() {
 
         {/* Upload Section */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h2 className="text-xl font-semibold mb-4">Upload New Firmware</h2>
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Upload New Firmware</h2>
           
           <div className="space-y-4">
             <div>
-              <label htmlFor="firmware-input" className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="firmware-input" className="block text-sm font-medium text-gray-900 mb-2">
                 Select Firmware File (.bin)
               </label>
               <input
@@ -140,8 +140,8 @@ export default function FotaPage() {
                 disabled={uploading}
               />
               {file && (
-                <p className="mt-2 text-sm text-gray-600">
-                  Selected: {file.name} ({(file.size / 1024).toFixed(2)} KB)
+                <p className="mt-2 text-sm text-gray-900">
+                  Selected: <span className="font-medium">{file.name}</span> ({(file.size / 1024).toFixed(2)} KB)
                 </p>
               )}
             </div>
@@ -171,7 +171,7 @@ export default function FotaPage() {
 
           <div className="mt-6 p-4 bg-blue-50 rounded-lg">
             <h3 className="text-sm font-semibold text-blue-900 mb-2">ℹ️ How it works:</h3>
-            <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
+            <ul className="text-sm text-blue-900 space-y-1 list-disc list-inside">
               <li>Upload a .bin firmware file</li>
               <li>Device will receive update notification on next data upload</li>
               <li>Device downloads firmware in chunks and verifies SHA-256</li>
@@ -183,22 +183,22 @@ export default function FotaPage() {
         {/* History Section */}
         {history.length > 0 && (
           <div className="bg-white rounded-lg shadow p-6">
-            <h2 className="text-xl font-semibold mb-4">Update History</h2>
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">Update History</h2>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-left py-2 px-3">Date</th>
-                    <th className="text-left py-2 px-3">Status</th>
-                    <th className="text-left py-2 px-3">Size</th>
-                    <th className="text-left py-2 px-3">SHA-256</th>
+                    <th className="text-left py-2 px-3 text-gray-900 font-semibold">Date</th>
+                    <th className="text-left py-2 px-3 text-gray-900 font-semibold">Status</th>
+                    <th className="text-left py-2 px-3 text-gray-900 font-semibold">Size</th>
+                    <th className="text-left py-2 px-3 text-gray-900 font-semibold">SHA-256</th>
                   </tr>
                 </thead>
                 <tbody>
                   {history.map((update) => (
                     <tr key={update.id} className="border-b hover:bg-gray-50">
-                      <td className="py-2 px-3">
-                        {new Date(update.created_at).toLocaleString()}
+                      <td className="py-2 px-3 text-gray-900">
+                        {new Date(update.createdAt || update.created_at).toLocaleString()}
                       </td>
                       <td className="py-2 px-3">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
@@ -210,11 +210,11 @@ export default function FotaPage() {
                           {update.status}
                         </span>
                       </td>
-                      <td className="py-2 px-3 font-mono">
-                        {(update.firmware_size / 1024).toFixed(2)} KB
+                      <td className="py-2 px-3 font-mono text-gray-900">
+                        {((update.firmwareSize || update.firmware_size) / 1024).toFixed(2)} KB
                       </td>
-                      <td className="py-2 px-3 font-mono text-xs">
-                        {update.firmware_sha256.substring(0, 16)}...
+                      <td className="py-2 px-3 font-mono text-xs text-gray-900">
+                        {(update.firmwareSha256 || update.firmware_sha256)?.substring(0, 16)}...
                       </td>
                     </tr>
                   ))}

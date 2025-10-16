@@ -1,19 +1,35 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { PrismaClient } from '@prisma/client';
+import { createClient } from '@supabase/supabase-js';
 
 const prisma = new PrismaClient();
+
+// Initialize Supabase client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Handle POST requests
 export async function POST(request) {
   try {
-    // Read the request body as text
+    // Read the request body
     const body = await request.text();
+    
+    console.log('[FOTA LOG] Received from ESP32:', body);
 
-    // Parse the FOTA log response according to specification
-    const logData = parseFotaLog(body);
+    // Try to parse as JSON first (new format)
+    let logData;
+    try {
+      const jsonData = JSON.parse(body);
+      logData = parseJsonFotaLog(jsonData);
+    } catch (e) {
+      // Fallback to pipe-delimited format (old format)
+      logData = parseFotaLog(body);
+    }
 
     if (!logData) {
+      console.error('[FOTA LOG] Invalid log format');
       return new Response(JSON.stringify({ 
         success: false, 
         error: 'Invalid log format' 
@@ -26,59 +42,93 @@ export async function POST(request) {
     // Save raw log to file for debugging
     const uploadsDir = path.join(process.cwd(), "private", "fota_logs");
     await fs.mkdir(uploadsDir, { recursive: true });
-    const filename = `log_${Date.now()}.txt`;
+    const filename = `log_${logData.jobId || Date.now()}.json`;
     const filePath = path.join(uploadsDir, filename);
     await fs.writeFile(filePath, body, "utf-8");
+    
+    console.log('[FOTA LOG] Saved to:', filename);
 
-    // Find the corresponding FOTA update record
-    const fotaUpdate = await prisma.fotaUpdate.findFirst({
-      where: {
-        firmware_sha256: logData.sha256,
-        status: 'SENDING',
-      },
-      orderBy: {
-        created_at: 'desc',
-      },
-    });
+    console.log('[FOTA LOG] Saved to:', filename);
 
-    if (fotaUpdate) {
-      // Update FOTA update status based on result
-      const newStatus = logData.success ? 'COMPLETED' : 'FAILED';
-      await prisma.fotaUpdate.update({
-        where: { id: fotaUpdate.id },
-        data: { status: newStatus },
+    // Try to find the corresponding FOTA update record
+    let fotaUpdate = null;
+    
+    try {
+      // Try Prisma first
+      fotaUpdate = await prisma.fotaUpdate.findFirst({
+        where: {
+          status: { in: ['SENDING', 'PENDING'] },
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
       });
+    } catch (prismaError) {
+      console.error('[FOTA LOG] Prisma failed, using Supabase:', prismaError);
+      
+      // Fallback to Supabase
+      const { data, error } = await supabase
+        .from("fota_updates")
+        .select("*")
+        .in("status", ['SENDING', 'PENDING'])
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (!error && data?.[0]) {
+        fotaUpdate = {
+          id: data[0].id,
+          firmwareSha256: data[0].firmware_sha256,
+          status: data[0].status,
+        };
+      }
     }
 
-    // Store detailed log in fota_logs table
-    await prisma.fotaLog.create({
-      data: {
-        fota_update_id: fotaUpdate ? fotaUpdate.id : null,
-        firmware_sha256: logData.sha256,
-        download_success: logData.downloadSuccess,
-        verification_success: logData.verificationSuccess,
-        update_success: logData.updateSuccess,
-        overall_success: logData.success,
-        error_stage: logData.errorStage,
-        error_code: logData.errorCode,
-        download_duration_ms: logData.downloadDuration,
-        total_duration_ms: logData.totalDuration,
-        raw_log: body,
-        log_file_path: filename,
-      },
-    });
+    if (fotaUpdate) {
+      console.log('[FOTA LOG] Found FOTA update:', fotaUpdate.id, 'Status:', logData.final_status);
+      
+      // Update FOTA update status based on result
+      const newStatus = logData.final_status === 'SUCCESS' ? 'COMPLETED' : 'FAILED';
+      const deviceResponse = JSON.stringify(logData);
+      
+      try {
+        await prisma.fotaUpdate.update({
+          where: { id: fotaUpdate.id },
+          data: { 
+            status: newStatus,
+            deviceResponse: deviceResponse,
+            errorMessage: logData.final_status === 'FAILURE' ? 'FOTA update failed on device' : null,
+            updatedAt: new Date(),
+          },
+        });
+      } catch (dbError) {
+        console.error('[FOTA LOG] Prisma update failed, using Supabase:', dbError);
+        
+        // Fallback to Supabase
+        await supabase
+          .from("fota_updates")
+          .update({
+            status: newStatus,
+            device_response: deviceResponse,
+            error_message: logData.final_status === 'FAILURE' ? 'FOTA update failed on device' : null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", fotaUpdate.id);
+      }
+    }
 
     return new Response(JSON.stringify({ 
-      success: true, 
-      file: filename,
-      parsed: logData 
+      status: 'success',
+      message: 'FOTA log received',
+      jobId: logData.jobId,
+      final_status: logData.final_status,
+      file: filename
     }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
 
   } catch (err) {
-    console.error("FOTA log processing error:", err);
+    console.error("[FOTA LOG] Processing error:", err);
     return new Response(JSON.stringify({ 
       success: false, 
       error: err.message 
@@ -86,6 +136,37 @@ export async function POST(request) {
       status: 500,
       headers: { "Content-Type": "application/json" },
     });
+  }
+}
+
+/**
+ * Parse new JSON FOTA log format from ESP32
+ * Format:
+ * {
+ *   "jobId": "fota-job-7",
+ *   "final_status": "SUCCESS",
+ *   "duration_ms": 23299,
+ *   "events": [...]
+ * }
+ */
+function parseJsonFotaLog(jsonData) {
+  try {
+    const { jobId, final_status, duration_ms, events } = jsonData;
+    
+    if (!jobId || !final_status || !Array.isArray(events)) {
+      return null;
+    }
+
+    return {
+      jobId: jobId,
+      final_status: final_status,
+      duration_ms: duration_ms,
+      events: events,
+      success: final_status === 'SUCCESS',
+    };
+  } catch (error) {
+    console.error('[FOTA LOG] JSON parsing error:', error);
+    return null;
   }
 }
 

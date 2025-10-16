@@ -41,11 +41,14 @@ export async function POST(req) {
     }
 
     // Create write command in database
+    const now = new Date().toISOString();
     const { data, error } = await supabase
       .from("write_commands")
       .insert({
         value: numValue,
-        status: "PENDING"
+        status: "PENDING",
+        created_at: now,
+        updated_at: now
       })
       .select()
       .single();

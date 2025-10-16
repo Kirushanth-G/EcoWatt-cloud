@@ -12,6 +12,36 @@ const supabase = createClient(
 const ESP32_ENDPOINT = process.env.ESP32_CONFIG_ENDPOINT || "http://192.168.1.100/config";
 const CONFIG_TIMEOUT = parseInt(process.env.CONFIG_TIMEOUT) || 10000; // 10 seconds default
 
+// Register name mapping: Web Interface → ESP32
+const REGISTER_MAPPING = {
+  // Web interface names → ESP32 expected names
+  "vac1": "voltage",
+  "iac1": "current", 
+  "fac1": "frequency",
+  "vpv1": "voltage",      // PV voltage maps to voltage
+  "vpv2": "voltage",      // PV voltage 2 maps to voltage  
+  "ipv1": "current",      // PV current maps to current
+  "ipv2": "current",      // PV current 2 maps to current
+  "temperature": "temperature",
+  "export_power": "export_power",
+  "output_power": "power",
+  
+  // ESP32 native names (no mapping needed)
+  "voltage": "voltage",
+  "current": "current", 
+  "power": "power",
+  "energy": "energy",
+  "frequency": "frequency",
+  "power_factor": "power_factor",
+  "humidity": "humidity",
+  "import_power": "import_power"
+};
+
+// Convert web interface register names to ESP32 register names
+function mapRegistersToESP32(webRegisters) {
+  return webRegisters.map(reg => REGISTER_MAPPING[reg] || reg).filter((reg, index, arr) => arr.indexOf(reg) === index); // Remove duplicates
+}
+
 // Validate configuration payload
 function validateConfigPayload(config) {
   const errors = [];
@@ -42,10 +72,10 @@ function validateConfigPayload(config) {
     if (!Array.isArray(registers)) {
       errors.push("registers must be an array");
     } else {
-      const validRegisters = ["voltage", "current", "frequency", "temperature", "power", "vac1", "iac1", "fac1", "vpv1", "vpv2", "ipv1", "ipv2", "export_power", "output_power"];
-      const invalidRegisters = registers.filter(reg => !validRegisters.includes(reg));
+      const validWebRegisters = Object.keys(REGISTER_MAPPING);
+      const invalidRegisters = registers.filter(reg => !validWebRegisters.includes(reg));
       if (invalidRegisters.length > 0) {
-        errors.push(`Invalid registers: ${invalidRegisters.join(", ")}. Valid registers: ${validRegisters.join(", ")}`);
+        errors.push(`Invalid registers: ${invalidRegisters.join(", ")}. Valid registers: ${validWebRegisters.join(", ")}`);
       }
     }
   }
@@ -68,7 +98,9 @@ async function logConfigurationAttempt(configSent, deviceResponse = null, status
         config_sent: configSent,
         device_response: deviceResponse,
         status: status,
-        error_message: errorMessage
+        error_message: errorMessage,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       }])
       .select()
       .single();
@@ -135,8 +167,16 @@ export async function POST(req) {
       }, { status: 400 });
     }
 
+    // Map web interface register names to ESP32 register names
+    const mappedConfig = { ...body };
+    if (body.config_update && body.config_update.registers) {
+      mappedConfig.config_update.registers = mapRegistersToESP32(body.config_update.registers);
+      console.log("Original registers:", body.config_update.registers);
+      console.log("Mapped registers:", mappedConfig.config_update.registers);
+    }
+
     // Log the configuration attempt as PENDING (ESP32 will poll for it)
-    logId = await logConfigurationAttempt(body, null, "PENDING", null, deviceId);
+    logId = await logConfigurationAttempt(mappedConfig, null, "PENDING", null, deviceId);
 
     console.log(`Configuration queued for device ${deviceId}, waiting for ESP32 to poll`);
 

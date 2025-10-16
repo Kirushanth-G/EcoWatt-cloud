@@ -1,0 +1,1 @@
+{"jobId":"fota-job-12","final_status":"SUCCESS","duration_ms":19617,"events":[{"ts":"2025-10-16T23:09:57+05:30","lvl":"INFO","msg":"FOTA_START","job":"fota-job-12","from":"1.0.0","to":"unknown"},{"ts":"2025-10-16T23:10:16+05:30","lvl":"INFO","msg":"FOTA_SUCCESS"}]}
