@@ -491,14 +491,19 @@ export async function POST(req) {
       console.log(`Frame hex: ${Array.from(frame).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
     }
 
-    // Step 5: Validate frame size (48 bytes total)
-    if (frame.length !== EXPECTED_FRAME_SIZE) {
-      console.error(`Invalid frame size: ${frame.length}, expected: ${EXPECTED_FRAME_SIZE}`);
+    // Step 5: Validate frame size (minimum size check for metadata + CRC)
+    const MIN_FRAME_SIZE = 3; // 1 byte metadata + 2 bytes CRC minimum
+    const MAX_FRAME_SIZE = 200; // Reasonable upper limit for compressed data
+    
+    if (frame.length < MIN_FRAME_SIZE || frame.length > MAX_FRAME_SIZE) {
+      console.error(`Invalid frame size: ${frame.length}, expected between ${MIN_FRAME_SIZE} and ${MAX_FRAME_SIZE} bytes`);
       return NextResponse.json(
         { error: "Invalid frame size" },
         { status: 400 }
       );
     }
+    
+    console.log(`Frame size: ${frame.length} bytes (valid range: ${MIN_FRAME_SIZE}-${MAX_FRAME_SIZE})`);
 
     // Step 6: Validate CRC
     if (!validateCRC(frame)) {
@@ -510,15 +515,11 @@ export async function POST(req) {
     }
 
     // Step 7: Extract components (remove CRC to get data)
-    const dataWithoutCRC = frame.slice(0, -EXPECTED_CRC_SIZE); // First 46 bytes
+    const dataWithoutCRC = frame.slice(0, -EXPECTED_CRC_SIZE);
     const metadataFlag = dataWithoutCRC[0]; // First byte
-    const headerData = dataWithoutCRC.slice(EXPECTED_METADATA_SIZE, EXPECTED_METADATA_SIZE + EXPECTED_HEADER_SIZE); // Bytes 1-5
-    const compressedPayload = dataWithoutCRC.slice(EXPECTED_METADATA_SIZE + EXPECTED_HEADER_SIZE); // Next 40 bytes
 
     console.log(`Data without CRC: ${dataWithoutCRC.length} bytes`);
     console.log(`Metadata flag: 0x${metadataFlag.toString(16).padStart(2, '0')}`);
-    console.log(`Header: ${headerData.length} bytes`);
-    console.log(`Compressed payload: ${compressedPayload.length} bytes`);
 
     // Step 8: Validate metadata flag (0x00 = raw compression, 0x01 = aggregated)
     if (metadataFlag !== 0x00) {
@@ -529,7 +530,23 @@ export async function POST(req) {
       );
     }
 
-    // Step 9: Parse and validate header
+    // Step 9: Extract header and compressed payload
+    if (dataWithoutCRC.length < 7) { // metadata(1) + header(5) + minimum data(1)
+      return NextResponse.json(
+        { error: "Frame too short to contain header" },
+        { status: 400 }
+      );
+    }
+
+    // Extract header (5 bytes after metadata)
+    const headerData = dataWithoutCRC.slice(1, 6);
+    console.log(`Header data: ${headerData.toString('hex')}`);
+
+    // Extract compressed payload (everything after metadata and header)
+    const compressedPayload = dataWithoutCRC.slice(6);
+    console.log(`Compressed payload: ${compressedPayload.length} bytes`);
+
+    // Step 10: Parse and validate header
     let header;
     try {
       header = parseFrameHeader(headerData);
@@ -541,7 +558,7 @@ export async function POST(req) {
       );
     }
 
-    // Step 10: Decompress data to extract sensor values
+    // Step 11: Decompress data to extract sensor values
     let sensorValues;
     try {
       sensorValues = decompressData(compressedPayload, header);
@@ -555,17 +572,17 @@ export async function POST(req) {
 
     console.log(`Extracted ${sensorValues.length} sensor values:`, sensorValues);
 
-    // Step 11: Store data in database (graceful handling)
+    // Step 12: Store data in database (graceful handling)
     console.log(`\n=== Storing ${sensorValues.length} sensor values ===`);
     const storageResult = await storeSensorData(sensorValues);
     
-    // Step 12: Check for pending updates/commands
+    // Step 13: Check for pending updates/commands
     console.log(`\n=== Checking for pending updates and commands ===`);
     const pendingConfig = await checkForPendingConfiguration();
     const pendingCommand = await checkForPendingWriteCommand();
     const pendingFOTA = await checkForPendingFOTA();
     
-    // Step 13: Generate unified response
+    // Step 14: Generate unified response
     const responseData = {
       status: "success"
     };
