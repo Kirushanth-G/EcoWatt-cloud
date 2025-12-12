@@ -13,6 +13,9 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+// Check if running on Vercel (serverless)
+const isVercel = process.env.VERCEL === '1';
+
 export async function POST(request) {
   try {
     const formData = await request.formData();
@@ -40,17 +43,41 @@ export async function POST(request) {
     // Calculate SHA-256
     const sha256 = createHash('sha256').update(buffer).digest('hex');
 
-    // Ensure uploads directory exists
-    const uploadsDir = path.join(process.cwd(), 'uploads');
-    try {
-      await mkdir(uploadsDir, { recursive: true });
-    } catch (error) {
-      // Directory might already exist
-    }
+    // Save file to appropriate storage
+    if (isVercel) {
+      // On Vercel: Use Supabase Storage
+      console.log('Uploading to Supabase Storage (Vercel environment)');
+      
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('firmware')
+        .upload('firmware.bin', buffer, {
+          contentType: 'application/octet-stream',
+          upsert: true, // Overwrite if exists
+        });
 
-    // Save firmware to /uploads/firmware.bin (overwrites existing)
-    const firmwarePath = path.join(uploadsDir, 'firmware.bin');
-    await writeFile(firmwarePath, buffer);
+      if (uploadError) {
+        console.error('Supabase storage upload error:', uploadError);
+        return NextResponse.json(
+          { error: 'Failed to upload firmware to storage', details: uploadError.message },
+          { status: 500 }
+        );
+      }
+
+      console.log('Firmware uploaded to Supabase Storage:', uploadData);
+    } else {
+      // On localhost: Save to local file system
+      console.log('Saving to local file system (localhost)');
+      const uploadsDir = path.join(process.cwd(), 'uploads');
+      try {
+        await mkdir(uploadsDir, { recursive: true });
+      } catch (error) {
+        // Directory might already exist
+      }
+
+      const firmwarePath = path.join(uploadsDir, 'firmware.bin');
+      await writeFile(firmwarePath, buffer);
+      console.log('Firmware saved to:', firmwarePath);
+    }
 
     // Try Prisma first, fallback to Supabase
     try {

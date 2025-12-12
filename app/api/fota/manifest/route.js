@@ -66,30 +66,53 @@ export async function GET(req) {
       );
     }
 
-    // Get firmware file path
-    const firmwareFileName = `firmware_${pendingUpdate.firmwareSha256.substring(0, 8)}.bin`;
-    const firmwarePath = path.join(process.cwd(), 'public', firmwareFileName);
+    // Generate firmware download URL (works for both Vercel and localhost)
+    const downloadUrl = `${baseUrl}/api/fota/download`;
     
-    // Check if firmware file exists, if not try generic names
-    let actualFirmwarePath = firmwarePath;
-    if (!fs.existsSync(firmwarePath)) {
-      // Try common firmware names
-      const commonNames = ['firmware.bin', 'guru_firmware.bin', 'test_firmware.bin'];
-      let found = false;
-      
-      for (const name of commonNames) {
-        const testPath = path.join(process.cwd(), 'public', name);
-        if (fs.existsSync(testPath)) {
-          actualFirmwarePath = testPath;
-          found = true;
-          break;
+    // Verify firmware exists (check appropriate storage based on environment)
+    const isVercel = process.env.VERCEL === '1';
+    
+    if (isVercel) {
+      // Check Supabase Storage
+      const { data: fileList, error: listError } = await supabase.storage
+        .from('firmware')
+        .list('', { search: 'firmware.bin' });
+
+      if (listError || !fileList || fileList.length === 0) {
+        console.error('Firmware not found in Supabase Storage');
+        
+        try {
+          await prisma.fotaUpdate.update({
+            where: { id: pendingUpdate.id },
+            data: { 
+              status: 'FAILED',
+              errorMessage: 'Firmware file not found in storage',
+              updatedAt: new Date(),
+            },
+          });
+        } catch (dbError) {
+          await supabase
+            .from("fota_updates")
+            .update({
+              status: 'FAILED',
+              error_message: 'Firmware file not found in storage',
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", pendingUpdate.id);
         }
+        
+        return NextResponse.json(
+          { error: 'Firmware file not found in storage' },
+          { status: 404 }
+        );
       }
+    } else {
+      // Check local file system
+      const firmwarePath = path.join(process.cwd(), 'uploads', 'firmware.bin');
       
-      if (!found) {
+      if (!fs.existsSync(firmwarePath)) {
         console.error('Firmware file not found:', firmwarePath);
         
-        // Mark as failed in database
         try {
           await prisma.fotaUpdate.update({
             where: { id: pendingUpdate.id },
@@ -100,7 +123,6 @@ export async function GET(req) {
             },
           });
         } catch (dbError) {
-          // Try Supabase fallback
           await supabase
             .from("fota_updates")
             .update({
@@ -117,10 +139,6 @@ export async function GET(req) {
         );
       }
     }
-
-    // Generate firmware download URL
-    const actualFileName = path.basename(actualFirmwarePath);
-    const downloadUrl = `${baseUrl}/api/fota/download?file=${actualFileName}`;
 
     // Read private key for signing
     const privateKeyPath = path.join(process.cwd(), 'private', 'ecdsa_private.pem');
