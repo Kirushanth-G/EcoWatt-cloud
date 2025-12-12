@@ -5,6 +5,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+// Force Node.js runtime for file system operations
+export const runtime = 'nodejs';
+
 // Initialize Supabase client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

@@ -4,6 +4,10 @@ import { createClient } from "@supabase/supabase-js";
 import { writeFile, mkdir } from 'fs/promises';
 import { createHash } from 'crypto';
 import path from 'path';
+
+// Force Node.js runtime for file system operations
+export const runtime = 'nodejs';
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -126,7 +130,5 @@ export async function POST(request) {
       { error: 'Failed to upload firmware', details: error.message },
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }

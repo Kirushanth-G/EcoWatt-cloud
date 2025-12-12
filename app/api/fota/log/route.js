@@ -3,6 +3,9 @@ import path from "path";
 import prisma from '@/lib/prisma';
 import { createClient } from '@supabase/supabase-js';
 
+// Force Node.js runtime for file system operations
+export const runtime = 'nodejs';
+
 // Initialize Supabase client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

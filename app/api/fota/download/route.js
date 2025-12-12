@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { readFile, stat } from 'fs/promises';
 import path from 'path';
 
+// Force Node.js runtime for file system operations
+export const runtime = 'nodejs';
+
 export async function GET(request) {
   try {
     const firmwarePath = path.join(process.cwd(), 'uploads', 'firmware.bin');
