@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import prisma from '@/lib/prisma';
 import { createClient } from "@supabase/supabase-js";
-
-const prisma = new PrismaClient();
 
 // Fallback to Supabase if Prisma fails
 const supabase = createClient(

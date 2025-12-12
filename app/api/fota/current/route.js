@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import prisma from '@/lib/prisma';
 
 export async function GET() {
   try {
@@ -21,8 +19,13 @@ export async function GET() {
   } catch (error) {
     console.error('Error fetching current firmware:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch firmware info' },
+      { 
+        error: 'Failed to fetch firmware info',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined 
+      },
       { status: 500 }
     );
+  } finally {
+    await prisma.$disconnect();
   }
 }

@@ -1,9 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { PrismaClient } from '@prisma/client';
+import prisma from '@/lib/prisma';
 import { createClient } from '@supabase/supabase-js';
-
-const prisma = new PrismaClient();
 
 // Initialize Supabase client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
